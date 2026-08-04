@@ -6,7 +6,7 @@ CQAI QWGAN-IDS uses a PennyLane parameterized quantum circuit as the generator a
 
 The governing design is **`CQAI_QWGAN_IDS_TDD_v1.pdf`** (`CQAI-DDD-QWGAN-IDS-001`, version 1.0). This repository is an implementation workspace; the design document remains authoritative when implementation details differ.
 
-> **Current status:** this repository contains the initial NSL-KDD FR-1/FR-2 prototype, notebooks, fitted preprocessing artifacts, and the processed data requested in Issue #1. It does **not** yet constitute a completed FR-3–FR-8 implementation or a validated quantum-advantage experiment.
+> **Current status:** this repository contains the initial NSL-KDD FR-1/FR-2 prototype and the first tested FR-3 QWGAN-GP core (quantum generator, critic, gradient penalty, alternating optimizer, diagnostics, and checkpoints). It does **not** yet constitute a completed FR-3 experiment, an FR-4–FR-8 implementation, or a validated quantum-advantage result.
 
 ## Why this project exists
 
@@ -54,7 +54,7 @@ Quantum generation is strictly offline. The live scoring path contains only regi
 |---|---|---|
 | FR-1 | Ingest NSL-KDD, UNSW-NB15, and CIC-IDS2017 into a unified, schema-validated representation | Partial; NSL-KDD prototype present |
 | FR-2 | Reduce features to a qubit-matched latent space, encode to `[0, π]`, and persist a documented decode path | Partial; NSL-KDD PCA/angle prototype present |
-| FR-3 | Train a per-attack-class PennyLane quantum generator with a classical WGAN-GP critic | Not implemented in the current repository snapshot |
+| FR-3 | Train a per-attack-class PennyLane quantum generator with a classical WGAN-GP critic | In progress; tested CPU core present, production data runner pending |
 | FR-4 | Generate configurable minority samples and quarantine them until all fidelity gates pass | Not implemented |
 | FR-5 | Evaluate RF, XGBoost, DNN, and a separately reported quantum-kernel SVM track | Not implemented |
 | FR-6 | Run four controlled augmentation arms across exactly three seeds | Not implemented |
@@ -181,6 +181,47 @@ python run_pipeline.py --skip-download --stages load clean encode select angles 
 ```
 
 The current script is an exploratory FR-1/FR-2 pipeline. It is not the final leakage-safe, multi-dataset contract described by the design document.
+
+## FR-3 QWGAN-GP core
+
+The first FR-3 implementation slice lives under `QWGAN_IDS/cqai/qwgan/`. It deliberately does not consume the checked-in merged `data/angles.npy`; training requires an explicit train-only handoff:
+
+```python
+import numpy as np
+
+from cqai.qwgan import QWGANConfig, QWGANTrainer, TrainingAngles
+
+config = QWGANConfig(
+    n_qubits=8,
+    n_layers=3,
+    backend="default.qubit",
+    diff_method="backprop",
+    seed=42,
+)
+
+training_data = TrainingAngles.from_array(
+    np.load("path/to/train/angles.npy"),
+    config=config,
+    partition="train",
+    attack_class="u2r",
+    latent_columns=tuple(f"z{i}" for i in range(config.n_qubits)),
+)
+
+trainer = QWGANTrainer(config)
+diagnostics = trainer.train_step(training_data)
+trainer.save_checkpoint(
+    "artifacts/run-id/checkpoint.pt",
+    metadata={"run_id": "run-id", "attack_class": "u2r"},
+)
+```
+
+Run the fast CPU tests from `QWGAN_IDS/`:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+This core is not yet the full FR-3 deliverable. A versioned FR-1/FR-2 split contract, per-class dataloader/epoch runner, immutable run manifest, checkpoint retention policy, and three-seed training evidence remain pending.
 
 ## Verification required for future implementation
 

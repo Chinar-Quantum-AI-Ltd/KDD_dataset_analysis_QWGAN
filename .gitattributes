@@ -1,0 +1,4 @@
+QWGAN_IDS/data/*.npy filter=lfs diff=lfs merge=lfs -text
+QWGAN_IDS/data/*.pkl filter=lfs diff=lfs merge=lfs -text
+QWGAN_IDS/data/*.csv filter=lfs diff=lfs merge=lfs -text
+QWGAN_IDS/datasets/*.txt filter=lfs diff=lfs merge=lfs -text

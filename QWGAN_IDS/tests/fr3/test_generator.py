@@ -32,6 +32,30 @@ class QuantumGeneratorTests(unittest.TestCase):
         self.assertIsNotNone(generator.weights.grad)
         self.assertGreater(float(generator.weights.grad.abs().sum()), 0.0)
 
+    def test_rows_are_evaluated_independently_across_batch_sizes(self) -> None:
+        """Batched circuit execution must not couple samples to each other.
+
+        The QNode is broadcast over the batch dimension for speed. This guards
+        the property that made the slow per-row loop obviously correct: row i
+        of a batch is exactly that row evaluated on its own.
+        """
+
+        config = QWGANConfig(
+            n_qubits=8,
+            n_layers=3,
+            backend="default.qubit",
+            diff_method="backprop",
+            seed=13,
+        )
+        generator = QuantumGenerator(config)
+        noise = torch.rand(5, 8, dtype=torch.float64)
+
+        batched = generator(noise)
+        for index in range(noise.shape[0]):
+            single = generator(noise[index : index + 1])
+            self.assertEqual(single.shape, (1, 8))
+            self.assertTrue(torch.allclose(single[0], batched[index], atol=1e-12))
+
     def test_gradients_flow_through_explicit_angle_domain_decoder(self) -> None:
         config = QWGANConfig(
             n_qubits=8,

@@ -63,6 +63,17 @@ class QWGANTrainer:
     def _to_angle_domain(expectations: torch.Tensor) -> torch.Tensor:
         return (expectations + 1.0) * (float(np.pi) / 2.0)
 
+    @torch.no_grad()
+    def generate(self, batch_size: int) -> torch.Tensor:
+        """Draw ``batch_size`` synthetic samples in the FR-2 angle domain.
+
+        This is the read-only view of the generator used by diagnostics and,
+        later, by FR-4 synthesis. It never touches optimizer state.
+        """
+
+        noise = self._sample_noise(batch_size)
+        return self._to_angle_domain(self.generator(noise))
+
     def critic_step(self, real: torch.Tensor) -> dict[str, float]:
         real = real.to(dtype=torch.float64)
         self.generator_optimizer.zero_grad(set_to_none=True)

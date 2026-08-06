@@ -6,7 +6,7 @@ CQAI QWGAN-IDS uses a PennyLane parameterized quantum circuit as the generator a
 
 The governing design is **`CQAI_QWGAN_IDS_TDD_v1.pdf`** (`CQAI-DDD-QWGAN-IDS-001`, version 1.0). This repository is an implementation workspace; the design document remains authoritative when implementation details differ.
 
-> **Current status:** this repository contains the initial NSL-KDD FR-1/FR-2 prototype and the first tested FR-3 QWGAN-GP core (quantum generator, critic, gradient penalty, alternating optimizer, diagnostics, and checkpoints). It does **not** yet constitute a completed FR-3 experiment, an FR-4–FR-8 implementation, or a validated quantum-advantage result.
+> **Current status:** this repository contains the initial NSL-KDD FR-1/FR-2 prototype and a completed FR-3 implementation — a leakage-safe train-only contract, the hybrid QWGAN-GP core, a per-attack-class training runner with diagnostics, checkpoints and hashed run manifests, and a reported three-seed training campaign on `u2r` and `r2l` whose cross-seed stability verdict is recorded. It does **not** yet contain an FR-4–FR-8 implementation, a fidelity-gated synthetic sample, or a validated quantum-advantage result. No synthetic data produced here is cleared for downstream use until the FR-4 gate exists.
 
 ## Why this project exists
 
@@ -54,7 +54,7 @@ Quantum generation is strictly offline. The live scoring path contains only regi
 |---|---|---|
 | FR-1 | Ingest NSL-KDD, UNSW-NB15, and CIC-IDS2017 into a unified, schema-validated representation | Partial; NSL-KDD prototype present |
 | FR-2 | Reduce features to a qubit-matched latent space, encode to `[0, π]`, and persist a documented decode path | Partial; NSL-KDD PCA/angle prototype present |
-| FR-3 | Train a per-attack-class PennyLane quantum generator with a classical WGAN-GP critic | In progress; tested CPU core present, production data runner pending |
+| FR-3 | Train a per-attack-class PennyLane quantum generator with a classical WGAN-GP critic | Complete on NSL-KDD: train-only contract, per-class runner, diagnostics, checkpoints, manifests, and a reported three-seed campaign on `u2r` and `r2l` reported stable across seeds |
 | FR-4 | Generate configurable minority samples and quarantine them until all fidelity gates pass | Not implemented |
 | FR-5 | Evaluate RF, XGBoost, DNN, and a separately reported quantum-kernel SVM track | Not implemented |
 | FR-6 | Run four controlled augmentation arms across exactly three seeds | Not implemented |
@@ -130,10 +130,15 @@ A null result is valid. If QWGAN does not outperform the classical WGAN-GP contr
 ├── README.md
 └── QWGAN_IDS/
     ├── artifacts/       # fitted encoder/scaler/PCA artifacts
+    │   ├── contracts/   # built train-only contracts (generated, Git-ignored)
+    │   └── runs/        # immutable FR-3 run outputs (generated, Git-ignored)
+    ├── cqai/            # FR-3: data contract, generator, critic, trainer, runner, CLI
+    ├── configs/         # versioned experiment configuration
     ├── data/            # processed NSL-KDD outputs (Git LFS)
     ├── datasets/        # KDDTrain+.txt and KDDTest+.txt (Git LFS)
     ├── notebooks/       # exploratory FR-1/FR-2 walkthroughs
     ├── src/             # loader, preprocessing, encoding, selection, quantum checks
+    ├── tests/fr3/       # fast CPU tests for FR-3
     ├── requirements.txt
     └── run_pipeline.py
 ```
@@ -182,46 +187,198 @@ python run_pipeline.py --skip-download --stages load clean encode select angles 
 
 The current script is an exploratory FR-1/FR-2 pipeline. It is not the final leakage-safe, multi-dataset contract described by the design document.
 
-## FR-3 QWGAN-GP core
+## FR-3 hybrid QWGAN-GP
 
-The first FR-3 implementation slice lives under `QWGAN_IDS/cqai/qwgan/`. It deliberately does not consume the checked-in merged `data/angles.npy`; training requires an explicit train-only handoff:
+FR-3 lives under `QWGAN_IDS/cqai/`:
 
-```python
-import numpy as np
-
-from cqai.qwgan import QWGANConfig, QWGANTrainer, TrainingAngles
-
-config = QWGANConfig(
-    n_qubits=8,
-    n_layers=3,
-    backend="default.qubit",
-    diff_method="backprop",
-    seed=42,
-)
-
-training_data = TrainingAngles.from_array(
-    np.load("path/to/train/angles.npy"),
-    config=config,
-    partition="train",
-    attack_class="u2r",
-    latent_columns=tuple(f"z{i}" for i in range(config.n_qubits)),
-)
-
-trainer = QWGANTrainer(config)
-diagnostics = trainer.train_step(training_data)
-trainer.save_checkpoint(
-    "artifacts/run-id/checkpoint.pt",
-    metadata={"run_id": "run-id", "attack_class": "u2r"},
-)
+```text
+cqai/data/nslkdd.py     leakage-safe train-only angle contract (FR-1/FR-2 adapter)
+cqai/qwgan/generator.py PennyLane data-reuploading generator, batched QNode
+cqai/qwgan/critic.py    classical WGAN-GP critic
+cqai/qwgan/losses.py    canonical interpolation gradient penalty
+cqai/qwgan/trainer.py   alternating optimizer, diagnostics, checkpoints
+cqai/qwgan/runner.py    per-class epoch runner, monitors, FR-8 run manifest
+cqai/qwgan/report.py    cross-seed stability verdict over a finished run
+cqai/qwgan/cli.py       config-driven entry point
+configs/                versioned experiment configurations
 ```
 
-Run the fast CPU tests from `QWGAN_IDS/`:
+### The train-only contract
+
+FR-3 deliberately refuses the checked-in `data/angles.npy`: that file was
+produced by merging `KDDTrain+.txt` with `KDDTest+.txt` and fitting every
+transform on the merge, which is evaluation leakage.
+
+`cqai/data/nslkdd.py` rebuilds the same FR-2 chain — one-hot + `log1p` →
+RobustScaler → mutual-information top-k → PCA → MinMax → `× π` — with every
+transform fitted on the training partition alone. It reads `KDDTrain+.txt` and
+nothing else; there is no parameter for a test file, so it cannot fit on one.
+`KDDTest+.txt` therefore stays an immutable held-out real test set for FR-5/FR-6.
+
+The contract emits `angles_{train,val}.npy`, per-row family labels, the fitted
+transform artifacts, and a `contract.json` carrying the source hash, the
+resolved spec, per-class counts, and a SHA-256 for every artifact.
+
+On the real `KDDTrain+.txt` (125 973 rows, no duplicates) it produces:
+
+| Partition | normal | dos | probe | r2l | u2r | total |
+|---|---|---|---|---|---|---|
+| train | 53 875 | 36 744 | 9 327 | 797 | 42 | 100 785 |
+| val (held out for FR-4) | 13 468 | 9 183 | 2 329 | 198 | 10 | 25 188 |
+
+`u2r` has 42 training rows against a design batch size of 64. The runner clamps
+the batch to the class size rather than padding or resampling, because
+fabricating density in the rarest class is exactly the failure this project
+exists to avoid.
+
+### Running FR-3
 
 ```bash
-python -m unittest discover -s tests -v
+cd QWGAN_IDS
+python -m cqai.qwgan.cli --experiment configs/fr3_nslkdd.yaml --dry-run
+python -m cqai.qwgan.cli --experiment configs/fr3_nslkdd.yaml
+python -m cqai.qwgan.cli --experiment configs/fr3_nslkdd_u2r_long.yaml
 ```
 
-This core is not yet the full FR-3 deliverable. A versioned FR-1/FR-2 split contract, per-class dataloader/epoch runner, immutable run manifest, checkpoint retention policy, and three-seed training evidence remain pending.
+Two versioned configs ship. `fr3_nslkdd.yaml` is the shared 30-epoch schedule
+over `u2r` and `r2l`. `fr3_nslkdd_u2r_long.yaml` is identical except for the
+schedule, and exists because an epoch is not a comparable unit across these two
+classes: `r2l` has 797 training rows and gets 13 generator updates per epoch,
+`u2r` has 42 and gets exactly one.
+
+The contract is built on first use and reused afterwards; a config whose spec
+disagrees with an existing contract is rejected rather than silently mixed into
+one lineage. Each run writes an immutable `artifacts/runs/<run_id>/` containing:
+
+- `diagnostics.jsonl` — one record per training step: critic/generator loss,
+  Wasserstein estimate, gradient penalty, critic gradient norm, generator
+  gradient variance, diversity ratio, circuit depth and gate count, wall time,
+  device, and cost estimate;
+- `checkpoints/<class>/seed<n>/epoch*.pt` — generator, critic, both optimizers,
+  RNG state, config, and lineage metadata;
+- `manifest.json` — run ID, UTC timestamps, dataset ID/version/hash, schema
+  version, parent contract and its hashes, code commit, environment and package
+  versions, resolved config, all seeds, device/qubits/layers/shots/runtime/cost,
+  per-run results, and a SHA-256 for every output file;
+- `stability.json` / `stability.md` — the cross-seed verdict (see below).
+
+Two monitors run continuously and are recorded per class and seed:
+**barren plateau** (median generator gradient variance below threshold) and
+**mode collapse** (generated spread as a fraction of the real batch's spread).
+
+### The cross-seed stability verdict
+
+A manifest states what each seed did; it does not state whether the seeds
+*agree*. `cqai/qwgan/report.py` derives that judgement from a finished run and
+writes it beside the manifest, recording the parent run ID and the SHA-256 of
+the manifest it was computed from. It never rewrites the run, so regenerating a
+report cannot alter the evidence:
+
+```bash
+python -m cqai.qwgan.report artifacts/runs/<run_id>
+```
+
+A class is reported stable only when all of the following hold: three seeds were
+run; no seed raised the barren-plateau or mode-collapse flag; the minimum median
+gradient variance and diversity ratio clear the reporting thresholds; and the
+final Wasserstein estimates do not disagree across seeds. Disagreement requires
+the spread to be large *both* relative to the mean and in absolute terms — three
+seeds converging on ~0 have a huge relative spread and a negligible real one, and
+flagging that would punish the best case.
+
+The reporting thresholds are versioned inside `stability.json` and are
+independent of the monitor thresholds a run was configured with, so a permissive
+run config cannot launder a dead gradient signal past the report. `cli.py` exits
+`2` on an unstable run, so an unusable campaign cannot be mistaken for a
+successful one.
+
+**A stable verdict is not a claim of convergence.** The report also records the
+per-epoch Wasserstein trajectory and its first-to-last trend, but never gates on
+them: a still-rising estimate means the critic is outpacing the generator, which
+is a convergence signal, not a disagreement between seeds. Conflating the two in
+one pass/fail number would hide whichever problem the other explains away.
+
+### Reported runs
+
+Both runs used the contract at `artifacts/contracts/nslkdd-train-only-v1`
+(source `KDDTrain+.txt`, 125 973 rows), 10 qubits, 4 layers, `default.qubit`
+with backprop, `lambda_gp=10`, `n_critic=5`, Adam `1e-4` / `(0.0, 0.9)`, and
+seeds `13, 42, 1337`. Run artefacts are Git-ignored; the run IDs, manifest
+hashes and configs below are what makes them reproducible.
+
+| Run | Config | Class | Schedule | Final W (mean ± std) | Diversity (min) | Verdict |
+|---|---|---|---|---|---|---|
+| `fr3-nslkdd-full-001` | `fr3_nslkdd.yaml` | `r2l` (797 rows) | 30 epochs × 13 steps | 1.9227 ± 0.0331 | 0.320 | stable |
+| `fr3-nslkdd-full-001` | `fr3_nslkdd.yaml` | `u2r` (42 rows) | 30 epochs × 1 step | 1.7938 ± 0.0980 | 0.201 | stable |
+| `fr3-nslkdd-u2r-long-001` | `fr3_nslkdd_u2r_long.yaml` | `u2r` (42 rows) | 300 epochs × 1 step | 2.2794 ± 0.0143 | 0.201 | stable |
+
+Total 25.9 min and 14.4 min on CPU. No seed in either run raised the
+barren-plateau or mode-collapse flag; the minimum median generator gradient
+variance was `1.9e-05` and `3.4e-05` respectively, five orders of magnitude
+above the plateau threshold.
+
+The Wasserstein estimate flattens in both classes — `r2l` by roughly epoch 10
+(1.9414 → 1.9689 from epoch 10 to 30) and `u2r` only under the long schedule
+(2.2444 at epoch 150 → 2.2794 at epoch 300, a 0.7 % change over the last 100
+epochs). Under the shared 30-epoch schedule `u2r` was still climbing at the end
+of training, which is what the second config exists to correct.
+
+**Read these numbers carefully.** A flattened Wasserstein estimate means
+training became reproducible and stopped moving, not that the generator matched
+the real distribution: the estimate plateaus at a large positive value, so the
+critic can still separate real from generated. Likewise, a diversity ratio of
+0.20–0.32 clears the mode-collapse threshold while saying plainly that the
+generated spread is a fraction of the real batch's. Whether these samples are
+good enough for anything is precisely the question the FR-4 fidelity gate exists
+to answer, and it does not exist yet.
+
+### Library use
+
+```python
+from cqai.data import ContractSpec, build_train_contract
+from cqai.qwgan import QWGANConfig, TrainingPlan, run_training
+
+contract = build_train_contract(
+    "datasets/KDDTrain+.txt",
+    "artifacts/contracts/nslkdd-train-only-v1",
+    spec=ContractSpec(n_qubits=10),
+)
+result = run_training(
+    contract,
+    config=QWGANConfig(n_qubits=10, n_layers=4),
+    plan=TrainingPlan(attack_classes=("u2r", "r2l"), seeds=(13, 42, 1337)),
+    output_dir="artifacts/runs",
+)
+```
+
+### Tests
+
+```bash
+cd QWGAN_IDS
+python -m unittest discover -s tests/fr3 -t . -v
+```
+
+38 fast CPU tests, roughly 70 seconds, offline, and independent of Git LFS: they
+run against a tiny generated NSL-KDD fixture rather than the real dataset.
+
+### What FR-3 still does not have
+
+- **No evidence that the generated samples are any good.** The campaign shows
+  training is reproducible and stable across seeds; it does not show statistical
+  fidelity, and the plateaued Wasserstein estimate suggests the critic still
+  separates real from generated. That judgement belongs to the FR-4 gate.
+- Only `u2r` and `r2l` were trained. `normal`, `dos` and `probe` are majority or
+  near-majority classes and are not augmentation targets.
+- No hyperparameter search. Layer count, learning rate and critic width are the
+  TDD defaults; nothing here establishes them as good choices for this data.
+- `lightning.gpu` with adjoint differentiation is the production simulation
+  target in the TDD. Every reported number comes from `default.qubit` on CPU.
+- The contract's decode path is **approximate**. PCA and top-k selection both
+  discard information, so `decode_angles` recovers the selected features only,
+  not the full 41-column NSL-KDD record.
+- FR-4 synthesis and the fidelity gate do not exist, so no synthetic sample is
+  cleared for any downstream use.
+- Only NSL-KDD is covered. UNSW-NB15 and CIC-IDS2017 are FR-1 work.
 
 ## Verification required for future implementation
 

@@ -37,7 +37,8 @@ class QuantumGenerator(nn.Module):
         def circuit(noise: torch.Tensor, weights: torch.Tensor):
             for layer in range(self.config.n_layers):
                 for wire in range(n_qubits):
-                    qml.RY(noise[wire], wires=wire)
+                    # Data re-uploading: the same noise angle enters every layer.
+                    qml.RY(noise[..., wire], wires=wire)
                     qml.Rot(*weights[layer, wire], wires=wire)
                 for wire in range(n_qubits):
                     qml.CNOT(wires=[wire, (wire + 1) % n_qubits])
@@ -53,13 +54,15 @@ class QuantumGenerator(nn.Module):
         if not torch.isfinite(noise).all():
             raise ValueError("noise must contain only finite values")
         noise = noise.to(dtype=torch.float64)
-        rows = [torch.stack(self._circuit(row, self.weights)) for row in noise]
-        return torch.stack(rows)
+        # The QNode is broadcast over the batch dimension: one simulator call
+        # per batch instead of one per sample. Samples stay independent.
+        expectations = self._circuit(noise, self.weights)
+        return torch.stack(expectations, dim=-1)
 
     def circuit_resources(self) -> dict[str, int]:
         """Return compiled gate count and depth for lineage diagnostics."""
 
-        sample = torch.zeros(self.config.n_qubits, dtype=torch.float64)
+        sample = torch.zeros(1, self.config.n_qubits, dtype=torch.float64)
         resources = qml.specs(self._circuit)(sample, self.weights)["resources"]
         return {
             "circuit_depth": int(resources.depth),

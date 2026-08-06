@@ -1,0 +1,60 @@
+# FR-3 — per-attack-class hybrid QWGAN-GP on NSL-KDD.
+#
+# This file is the resolved configuration for a real FR-3 run. It is versioned
+# on purpose: every manifest records it verbatim, so a reported number can be
+# traced back to the exact settings that produced it. Change it in a commit,
+# not in an editor buffer before a run.
+#
+# Run it with:
+#   python -m cqai.qwgan.cli --experiment configs/fr3_nslkdd.yaml
+#
+# Defaults follow CQAI_QWGAN_IDS_TDD_v1.pdf. Deviations must be recorded here
+# and reported, never applied silently.
+
+version: "1.0.0"
+
+# --------------------------------------------------------------------------- #
+# FR-1/FR-2 handoff: a leakage-safe, train-only angle contract.
+# Built from KDDTrain+.txt alone; KDDTest+.txt is never opened, so the real
+# held-out test set stays immutable for FR-5/FR-6.
+# --------------------------------------------------------------------------- #
+contract:
+  n_qubits: 10          # latent width == qubit count (TDD default)
+  top_k: 20             # mutual-information pre-selection before PCA
+  val_fraction: 0.2     # held-out real rows, reserved for the FR-4 gate
+  split_seed: 42
+  transform_seed: 42
+  mi_sample_cap: 20000  # MI ranking is subsampled from train rows only
+
+# --------------------------------------------------------------------------- #
+# Quantum generator and classical critic.
+# --------------------------------------------------------------------------- #
+model:
+  n_qubits: 10          # must equal contract.n_qubits
+  n_layers: 4           # TDD default; valid range 3-6
+  backend: default.qubit
+  diff_method: backprop
+  lambda_gp: 10.0
+  n_critic: 5
+  learning_rate: 0.0001
+  beta1: 0.0
+  beta2: 0.9
+
+# --------------------------------------------------------------------------- #
+# Experiment shape.
+# --------------------------------------------------------------------------- #
+training:
+  # The rare NSL-KDD families. `normal`, `dos` and `probe` are majority or
+  # near-majority classes and are not augmentation targets.
+  attack_classes:
+    - u2r
+    - r2l
+  # FR-6 requires exactly three centrally configured seeds. Never hard-code 42
+  # alone: single-seed results cannot support a quantum-benefit claim.
+  seeds: [13, 42, 1337]
+  epochs: 30
+  batch_size: 64        # clamped down automatically for classes smaller than this
+  checkpoint_every: 5
+  critic_hidden_dims: [128, 64]
+  barren_plateau_variance: 1.0e-12
+  mode_collapse_ratio: 0.1

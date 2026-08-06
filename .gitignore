@@ -1,0 +1,9 @@
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+# Generated FR-3 run artefacts and built contracts. Immutable per-run outputs
+# belong in object storage, not in Git history.
+QWGAN_IDS/artifacts/runs/
+QWGAN_IDS/artifacts/contracts/

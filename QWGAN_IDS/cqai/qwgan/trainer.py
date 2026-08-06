@@ -49,15 +49,42 @@ class QWGANTrainer:
         )
         self.global_step = 0
 
-    def _sample_noise(self, batch_size: int) -> torch.Tensor:
+    def _sample_noise(
+        self, batch_size: int, generator: torch.Generator | None = None
+    ) -> torch.Tensor:
         if batch_size < 1:
             raise ValueError("batch_size must be positive")
         return torch.rand(
             batch_size,
             self.config.n_qubits,
             dtype=torch.float64,
-            generator=self._random,
+            generator=generator if generator is not None else self._random,
         ) * float(np.pi)
+
+    @torch.no_grad()
+    def sample_noise(
+        self, batch_size: int, *, seed: int | None = None
+    ) -> torch.Tensor:
+        """Latent noise, optionally drawn from an independently seeded stream.
+
+        FR-4 synthesis passes an explicit seed so its samples depend on the
+        synthesis config rather than on the epoch a checkpoint happened to be
+        taken at: a restored trainer's RNG carries the training history with it,
+        which would make a run unreplayable from a different checkpoint.
+        """
+
+        stream = (
+            torch.Generator().manual_seed(seed) if seed is not None else None
+        )
+        return self._sample_noise(batch_size, stream)
+
+    @torch.no_grad()
+    def generate_from_noise(self, noise: torch.Tensor) -> torch.Tensor:
+        """Map explicit latent noise to the FR-2 angle domain."""
+
+        return self._to_angle_domain(
+            self.generator(noise.to(dtype=torch.float64))
+        )
 
     @staticmethod
     def _to_angle_domain(expectations: torch.Tensor) -> torch.Tensor:
@@ -71,8 +98,7 @@ class QWGANTrainer:
         later, by FR-4 synthesis. It never touches optimizer state.
         """
 
-        noise = self._sample_noise(batch_size)
-        return self._to_angle_domain(self.generator(noise))
+        return self.generate_from_noise(self._sample_noise(batch_size))
 
     def critic_step(self, real: torch.Tensor) -> dict[str, float]:
         real = real.to(dtype=torch.float64)

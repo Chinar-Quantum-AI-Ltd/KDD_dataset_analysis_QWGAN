@@ -7,3 +7,4 @@
 # belong in object storage, not in Git history.
 QWGAN_IDS/artifacts/runs/
 QWGAN_IDS/artifacts/contracts/
+QWGAN_IDS/artifacts/synthesis/

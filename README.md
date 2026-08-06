@@ -6,7 +6,7 @@ CQAI QWGAN-IDS uses a PennyLane parameterized quantum circuit as the generator a
 
 The governing design is **`CQAI_QWGAN_IDS_TDD_v1.pdf`** (`CQAI-DDD-QWGAN-IDS-001`, version 1.0). This repository is an implementation workspace; the design document remains authoritative when implementation details differ.
 
-> **Current status:** this repository contains the initial NSL-KDD FR-1/FR-2 prototype and a completed FR-3 implementation — a leakage-safe train-only contract, the hybrid QWGAN-GP core, a per-attack-class training runner with diagnostics, checkpoints and hashed run manifests, and a reported three-seed training campaign on `u2r` and `r2l` whose cross-seed stability verdict is recorded. It does **not** yet contain an FR-4–FR-8 implementation, a fidelity-gated synthetic sample, or a validated quantum-advantage result. No synthetic data produced here is cleared for downstream use until the FR-4 gate exists.
+> **Current status:** this repository contains the initial NSL-KDD FR-1/FR-2 prototype, a completed FR-3 implementation (leakage-safe train-only contract, hybrid QWGAN-GP core, per-class runner with diagnostics, checkpoints, hashed manifests, and a reported three-seed campaign that is stable across seeds), and a completed FR-4 synthesis and fidelity gate. **The reported FR-4 run released nothing:** all 18 batches were quarantined, `r2l` failing the C2ST, Wasserstein, KS and coverage criteria by margins the null baseline rules out as threshold artefacts. The current generators do not produce usable synthetic data, so no sample is cleared for FR-5. FR-5–FR-8 are not implemented and there is no validated quantum-advantage result.
 
 ## Why this project exists
 
@@ -55,7 +55,7 @@ Quantum generation is strictly offline. The live scoring path contains only regi
 | FR-1 | Ingest NSL-KDD, UNSW-NB15, and CIC-IDS2017 into a unified, schema-validated representation | Partial; NSL-KDD prototype present |
 | FR-2 | Reduce features to a qubit-matched latent space, encode to `[0, π]`, and persist a documented decode path | Partial; NSL-KDD PCA/angle prototype present |
 | FR-3 | Train a per-attack-class PennyLane quantum generator with a classical WGAN-GP critic | Complete on NSL-KDD: train-only contract, per-class runner, diagnostics, checkpoints, manifests, and a reported three-seed campaign on `u2r` and `r2l` reported stable across seeds |
-| FR-4 | Generate configurable minority samples and quarantine them until all fidelity gates pass | Not implemented |
+| FR-4 | Generate configurable minority samples and quarantine them until all fidelity gates pass | Complete on NSL-KDD: ratio-swept synthesis, five-signal null-calibrated gate, separate accepted/quarantine manifests. Reported run released **nothing** — the FR-3 generators fail the gate |
 | FR-5 | Evaluate RF, XGBoost, DNN, and a separately reported quantum-kernel SVM track | Not implemented |
 | FR-6 | Run four controlled augmentation arms across exactly three seeds | Not implemented |
 | FR-7 | Deploy the registered classical classifier to a low-latency streaming path | Not implemented |
@@ -131,14 +131,15 @@ A null result is valid. If QWGAN does not outperform the classical WGAN-GP contr
 └── QWGAN_IDS/
     ├── artifacts/       # fitted encoder/scaler/PCA artifacts
     │   ├── contracts/   # built train-only contracts (generated, Git-ignored)
-    │   └── runs/        # immutable FR-3 run outputs (generated, Git-ignored)
-    ├── cqai/            # FR-3: data contract, generator, critic, trainer, runner, CLI
+    │   ├── runs/        # immutable FR-3 run outputs (generated, Git-ignored)
+    │   └── synthesis/   # immutable FR-4 gated pools (generated, Git-ignored)
+    ├── cqai/            # FR-3 data/qwgan, FR-4 fidelity/synthesis
     ├── configs/         # versioned experiment configuration
     ├── data/            # processed NSL-KDD outputs (Git LFS)
     ├── datasets/        # KDDTrain+.txt and KDDTest+.txt (Git LFS)
     ├── notebooks/       # exploratory FR-1/FR-2 walkthroughs
     ├── src/             # loader, preprocessing, encoding, selection, quantum checks
-    ├── tests/fr3/       # fast CPU tests for FR-3
+    ├── tests/           # fast CPU tests (tests/fr3, tests/fr4, shared fixtures)
     ├── requirements.txt
     └── run_pipeline.py
 ```
@@ -355,7 +356,7 @@ result = run_training(
 
 ```bash
 cd QWGAN_IDS
-python -m unittest discover -s tests/fr3 -t . -v
+python -m unittest discover -s tests -t . -v
 ```
 
 38 fast CPU tests, roughly 70 seconds, offline, and independent of Git LFS: they
@@ -376,9 +377,158 @@ run against a tiny generated NSL-KDD fixture rather than the real dataset.
 - The contract's decode path is **approximate**. PCA and top-k selection both
   discard information, so `decode_angles` recovers the selected features only,
   not the full 41-column NSL-KDD record.
-- FR-4 synthesis and the fidelity gate do not exist, so no synthetic sample is
-  cleared for any downstream use.
 - Only NSL-KDD is covered. UNSW-NB15 and CIC-IDS2017 are FR-1 work.
+
+## FR-4 synthesis and fidelity gate
+
+FR-3 shows the generators train reproducibly. It says nothing about whether
+their samples are any good. FR-4 is the requirement that decides, and until a
+batch passes its gate no synthetic sample is cleared for any downstream use.
+
+```text
+cqai/fidelity/metrics.py   per-feature W-1 and KS, cross-validated C2ST, coverage
+cqai/fidelity/domain.py    NSL-KDD schema rules over the decoded feature space
+cqai/fidelity/gate.py      thresholds -> pass / fail / insufficient_evidence
+cqai/synthesis/generate.py checkpoint -> chunked sampling -> decode
+cqai/synthesis/runner.py   per (class, seed, ratio): generate, gate, route, record
+cqai/synthesis/cli.py      config-driven entry point
+configs/fr4_nslkdd.yaml    versioned thresholds and volumes
+```
+
+`fidelity/` judges samples and `synthesis/` makes them. They are separate
+packages so the gate can never be quietly tuned to whatever the current
+generator happens to produce.
+
+### The three verdicts
+
+| Verdict | Meaning | Released? |
+|---|---|---|
+| `pass` | every mandatory criterion cleared its versioned band | yes |
+| `fail` | at least one did not; `reasons` names which | no |
+| `insufficient_evidence` | the held-out real reference is too small to support a claim either way | no |
+
+The third verdict exists because NSL-KDD `u2r` has **10 held-out real rows**. A
+C2ST AUC computed against ten rows cannot certify anything, and returning `pass`
+there would be worse than returning nothing, so the gate fails closed. `fail`
+and `insufficient_evidence` route identically to quarantine; they are
+distinguished so a report can tell "measured and bad" from "could not measure".
+
+### What the gate measures
+
+All five signals the TDD mandates, class-conditionally, on the **decoded**
+representation rather than on angles:
+
+- **C2ST AUC** — a RandomForest trained to separate real from synthetic, over
+  stratified 5-fold CV. The synthetic side is subsampled to the real count,
+  because the pools differ by two orders of magnitude and imbalance inflates AUC
+  on its own. TDD hard threshold `<= 0.65`; `0.5` means indistinguishable.
+- **Per-feature Wasserstein-1**, reported raw and normalised by the real
+  column's robust spread. One band cannot serve `src_bytes` (thousands) and
+  `same_srv_rate` (bounded by 1), so the gate applies its threshold to the
+  normalised values and keeps the raw ones for sanity-checking.
+- **Per-feature Kolmogorov-Smirnov** — scale-free, so it catches a shape
+  mismatch that a small absolute W-1 on a narrow feature would understate.
+- **Coverage** — the fraction of real points whose nearest synthetic neighbour
+  falls inside that point's own k-th nearest *real* neighbour radius. This is
+  the mode-coverage question FR-3's diversity ratio cannot answer: a generator
+  emitting one point repeatedly can still show a plausible spread ratio.
+- **Domain validity** — an explicit NSL-KDD rule table (non-negative byte
+  counters, connection counters capped at 511 and per-host at 255, rates in
+  `[0, 1]`, indicators within tolerance of `{0, 1}`, mutually exclusive one-hot
+  flags), reported with a per-rule violation breakdown so a rejection is
+  actionable. The table is written out rather than derived from
+  `src.preprocessing.BINARY_COLS`, which despite its name contains count columns
+  and would license any value in `{0, 1}` for a counter.
+
+### Every criterion is calibrated against a null baseline
+
+Each result carries a **null reference**: the same metrics computed by splitting
+the held-out real sample in half and comparing it against itself. This is not a
+decoration. Measured on the real contract, decoding genuine held-out NSL-KDD
+rows through the fitted PCA and scalers yields a **domain validity of 0.0** —
+the lossy decode cannot reproduce a schema-valid record even from real data —
+and real-vs-real `r2l` scores a normalised W-1 of 14.6 and a KS of 0.25, both
+outside the configured bands.
+
+An absolute-only gate would therefore have charged the generator for three
+failures the decode and the sample size produced on their own. So a criterion
+fires only when the synthetic batch is **outside its configured band *and* worse
+than real data of the same size**. Where no null exists — too few real rows to
+halve — the absolute band decides alone, which keeps the gate strict rather than
+letting a missing baseline wave a batch through. The baseline can never turn a
+failure into a pass by itself; it can only withhold blame the generator did not
+earn.
+
+Every criterion records its `value`, `threshold`, `null` and `fired` flag in
+`gate.json`, so each reason in a verdict can be checked rather than trusted.
+
+### Running FR-4
+
+```bash
+cd QWGAN_IDS
+python -m cqai.synthesis.cli --experiment configs/fr4_nslkdd.yaml --dry-run
+python -m cqai.synthesis.cli --experiment configs/fr4_nslkdd.yaml
+```
+
+Volume is a target minority ratio, not a naive 1:1 balance: `round(ratio ×
+majority_train_count) − real_train_count`, swept over 0.2 / 0.3 / 0.4 as the TDD
+requires. Against the real contract that is 10 733–21 508 synthetic `u2r` rows
+and 9 978–20 753 `r2l` rows per seed.
+
+Each run writes an immutable `artifacts/synthesis/<run_id>/`:
+
+```text
+accepted/<class>/seed<n>/ratio<r>/    angles.npy, decoded.npy, gate.json
+quarantine/<class>/seed<n>/ratio<r>/  angles.npy, decoded.npy, gate.json
+accepted_manifest.json                per-batch lineage for released samples
+quarantine_manifest.json              the same for everything held back
+manifest.json                         FR-8 lineage + a SHA-256 for every output
+```
+
+Accepted and quarantined manifests are separate files. Each entry carries the
+generator checkpoint and its hash, class, seed, ratio, count, the resolved
+thresholds, the full gate result, and the decode artefact hashes — the same
+angles decoded by different transforms are different records, so the transform
+versions travel with the samples. The CLI exits `2` when nothing is released.
+
+### Reported gate result — nothing passed
+
+Run `fr4-nslkdd-002`, 11.5 min CPU, gating the FR-3 campaign's generators
+(`fr3-nslkdd-u2r-long-001` for `u2r`, `fr3-nslkdd-full-001` for `r2l`) across
+three seeds and three ratios — **18 batches, 0 accepted, 18 quarantined.**
+
+`r2l` is the meaningful test: 198 held-out real rows is enough to certify
+against. It fails decisively, and every fired criterion is worse than what real
+data of the same size scores:
+
+| Criterion | Synthetic | Threshold | Null (real vs real) | Fired |
+|---|---:|---:|---:|:--:|
+| C2ST AUC | 1.0000 | ≤ 0.65 | 0.4789 | yes |
+| Normalised W-1 (max) | 490.06 | ≤ 0.50 | 14.60 | yes |
+| KS (max) | 0.9943 | ≤ 0.20 | 0.2525 | yes |
+| Coverage | 0.1566 | ≥ 0.50 | 0.9697 | yes |
+| Domain validity | 0.0043 | ≥ 0.95 | 0.0000 | no — real data scores worse |
+
+A C2ST AUC of 1.0 against a null of 0.48 means the discriminator separates real
+from synthetic **perfectly**, on every fold. Coverage of 0.16 against a null of
+0.97 means the samples reach a sixth of the real modes. These are not marginal
+misses.
+
+`u2r` returns `insufficient_evidence` on all nine batches: 10 held-out rows
+cannot certify anything either way. Its recorded metrics point the same
+direction, but the gate refuses to make a claim from them.
+
+**The conclusion is that the FR-3 generators do not produce usable synthetic
+data, and no sample is released to FR-5.** This is a real result, not a
+configuration problem: it holds across three seeds, three volumes and both
+classes, and the null baseline rules out the thresholds being the cause. FR-4
+is complete in the sense that matters — the gate works, and what it found is
+that the generator does not.
+
+The domain row is the reason the null calibration exists. Decoding genuine
+held-out rows through the fitted PCA and scalers yields 0.0 validity, so an
+absolute-only gate would have reported `domain_invalid` as a fifth generator
+failure. It is a decode limitation, and the gate now says so.
 
 ## Verification required for future implementation
 

@@ -1,6 +1,6 @@
-"""Deterministic tiny NSL-KDD fixtures for fast FR-3 tests.
+"""Deterministic tiny NSL-KDD fixtures for fast FR-3 and FR-4 tests.
 
-The real ``KDDTrain+.txt`` has 125 973 rows. Nothing in the FR-3 test suite may
+The real ``KDDTrain+.txt`` has 125 973 rows. Nothing in the test suite may
 depend on it: tests must stay fast, offline, and independent of Git LFS.
 """
 from __future__ import annotations

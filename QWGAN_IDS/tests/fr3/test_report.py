@@ -15,7 +15,7 @@ from cqai.qwgan import (
     write_stability_report,
 )
 
-from .fixtures import write_nslkdd_fixture
+from ..fixtures import write_nslkdd_fixture
 
 SPEC = ContractSpec(n_qubits=8, top_k=12, val_fraction=0.25, split_seed=3)
 CONFIG = QWGANConfig(n_qubits=8, n_layers=3, n_critic=1, seed=5)

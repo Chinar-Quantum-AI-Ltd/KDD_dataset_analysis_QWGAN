@@ -10,7 +10,7 @@ import numpy as np
 from cqai.data import ContractSpec, build_train_contract, load_train_contract
 from cqai.qwgan import QWGANConfig
 
-from .fixtures import write_nslkdd_fixture
+from ..fixtures import write_nslkdd_fixture
 
 SPEC = ContractSpec(n_qubits=8, top_k=12, val_fraction=0.25, split_seed=3)
 

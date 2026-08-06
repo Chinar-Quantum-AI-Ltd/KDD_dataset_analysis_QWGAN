@@ -9,7 +9,7 @@ import yaml
 
 from cqai.qwgan.cli import build_parser, load_experiment, main
 
-from .fixtures import write_nslkdd_fixture
+from ..fixtures import write_nslkdd_fixture
 
 EXPERIMENT = {
     "contract": {
@@ -72,18 +72,20 @@ COMPLETED = (0, 2)
 
 class CliTests(unittest.TestCase):
     def test_every_shipped_config_is_valid(self) -> None:
-        """Every versioned config in ``configs/`` must load and obey the TDD.
+        """Every versioned FR-3 config must load and obey the TDD.
 
         This is deliberately a directory sweep rather than a named file: a new
         experiment config is exactly the kind of thing that gets added without
         a matching test, and a config that silently drops a seed or a WGAN-GP
-        default would produce results nobody could defend.
+        default would produce results nobody could defend. The glob is prefixed
+        because each requirement's config has its own schema and its own sweep;
+        FR-4's lives in ``tests/fr4/test_cli.py``.
         """
 
         configs = sorted(
-            (Path(__file__).resolve().parents[2] / "configs").glob("*.yaml")
+            (Path(__file__).resolve().parents[2] / "configs").glob("fr3_*.yaml")
         )
-        self.assertTrue(configs, "no versioned experiment configs found")
+        self.assertTrue(configs, "no versioned FR-3 experiment configs found")
 
         for shipped in configs:
             with self.subTest(config=shipped.name):

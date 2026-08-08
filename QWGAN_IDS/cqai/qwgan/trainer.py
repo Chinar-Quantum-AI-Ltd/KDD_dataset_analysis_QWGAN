@@ -59,7 +59,7 @@ class QWGANTrainer:
             self.config.n_qubits,
             dtype=torch.float64,
             generator=generator if generator is not None else self._random,
-        ) * float(np.pi)
+        ) * (self.config.latent_scale * float(np.pi))
 
     @torch.no_grad()
     def sample_noise(

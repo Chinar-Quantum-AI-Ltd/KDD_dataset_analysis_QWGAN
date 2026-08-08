@@ -190,6 +190,16 @@ The current script is an exploratory FR-1/FR-2 pipeline. It is not the final lea
 
 ## FR-3 hybrid QWGAN-GP
 
+> **Known defect.** The generators produced by the reported FR-3 campaign are
+> not usable: every qubit's output mean is pinned at π/2, so they failed the
+> FR-4 gate on every batch. The cause is the latent range interacting with data
+> re-uploading — not the optimizer, the critic, or a barren plateau — and it is
+> diagnosed with measurements in
+> [`docs/fr3-generator-diagnosis.md`](QWGAN_IDS/docs/fr3-generator-diagnosis.md).
+> `QWGANConfig.latent_scale` exists to address it, but **defaults to the
+> original 1.0** so no reported run changes meaning. No retrained generator has
+> been produced or gated yet.
+
 FR-3 lives under `QWGAN_IDS/cqai/`:
 
 ```text

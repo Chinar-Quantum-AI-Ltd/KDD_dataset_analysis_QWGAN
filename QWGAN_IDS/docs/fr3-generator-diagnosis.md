@@ -288,6 +288,77 @@ blob's centre and width; none of them could give it modes.
   transform is not worth spending compute on. Those levers are exhausted, and the
   measurements above say why.
 
+## Classical controls: nobody passes, and the decode is why
+
+The multimodality finding raised an obvious question — is this target learnable
+by *anything*? Three classical controls were scored against the same held-out
+`r2l` rows.
+
+In the **angle domain**, before decoding:
+
+| Model | C2ST | coverage | time |
+|---|---:|---:|---:|
+| real vs real — the floor | 0.5178 | — | — |
+| GMM(120) | **0.6140** | 1.0000 | 17 s |
+| GMM(30) | 0.6908 | 0.9949 | 28 s |
+| classical WGAN-GP, 8 000 steps | 0.9623 | 0.7121 | 17 min |
+| classical WGAN-GP, 2 000 steps | 0.9894 | 0.3636 | 6 min |
+| quantum WGAN-GP (v2) | 0.9978 | 0.1566 | ~2.5 h |
+
+Two things follow. The target **is** learnable — a Gaussian mixture reaches
+0.614 in seventeen seconds. And the WGAN-GP setup itself, not the circuit, is
+the larger handicap: a classical MLP generator with the identical critic, loss,
+gradient penalty, `n_critic` and optimizer only reaches 0.962 after 8 000 steps.
+The circuit then adds its own penalty on top, 0.998 against the MLP's 0.962.
+
+### The correction that matters
+
+Those numbers are measured in the angle domain. **The gate scores decoded
+samples**, and the same models look very different there:
+
+| | angle domain | decoded |
+|---|---:|---:|
+| floor (real vs real) | 0.5178 | 0.5909 |
+| GMM(120) | 0.6140 | **0.9197** |
+
+The floor rises modestly. The mixture's score nearly saturates. The decode is
+not inflating everything equally — it specifically amplifies a model's error,
+because the chain ends in `expm1`: a small angle-space deviation, pushed through
+the inverse PCA and inverse RobustScaler and then exponentiated, becomes a large
+one in the heavy-tailed byte and counter columns. Real data survives it because
+it is real.
+
+So **no model passes the gate**, classical mixtures included, and a large part
+of the difficulty is the FR-2 transform chain rather than any generator. That is
+also why the angle-domain improvements from the latent fix never showed up in
+the gate: they were real, and the decode ate them.
+
+This does not make the gate wrong. Anything downstream consumes decoded rows, so
+decoded fidelity is what FR-5 would actually depend on. It does mean the
+`log1p`/`expm1` step is a fidelity bottleneck in its own right, and it belongs
+on the list of things to change before another generator campaign.
+
+### A hole in our own gate
+
+Chasing the mixture result exposed a missing criterion. GMM(120) fits about
+7 800 parameters to 797 rows, and in the angle domain its samples sit **29 %
+closer to the training rows than genuine held-out rows do** (median nearest-
+neighbour distance 0.029 against the real 0.041). A model that echoes its
+training set passes a two-sample test trivially and contributes nothing to an
+augmented one — and none of the five mandated signals notices.
+
+`novelty_ratio` and a `memorised_training_data` criterion now close that. The
+measure is the median distance from synthetic samples to their nearest training
+row, divided by the same statistic for real held-out rows: near 1 means as novel
+as real data, near 0 means memorisation. It is optional and off unless a
+training reference is supplied, because every previously reported gate result
+was produced without it.
+
+Its threshold, 0.8, is **not calibrated** — and the signal is space-dependent in
+the same way everything else here is: GMM(120) scores 0.71 in the angle domain
+but 0.95 decoded, so in the gate's own space it would not have fired. It is
+recorded and enforced, but no reported number currently rests on it.
+
 ## What this does not establish
 
 - **Nothing has passed the gate.** v2 improved four of five criteria and cleared

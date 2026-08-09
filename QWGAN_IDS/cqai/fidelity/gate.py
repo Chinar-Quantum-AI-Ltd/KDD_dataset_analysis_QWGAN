@@ -28,7 +28,13 @@ import numpy as np
 import pandas as pd
 
 from .domain import check_domain
-from .metrics import c2st_auc, coverage, ks_statistic, wasserstein_1
+from .metrics import (
+    c2st_auc,
+    coverage,
+    ks_statistic,
+    novelty_ratio,
+    wasserstein_1,
+)
 
 GATE_VERSION = "1.0.0"
 
@@ -55,6 +61,11 @@ class FidelityThresholds:
     min_domain_validity: float = 0.95
     #: Below this many held-out real rows the gate refuses to certify.
     min_real_samples: int = 50
+    #: Synthetic samples must sit at least this fraction as far from the
+    #: training set as genuine held-out rows do. Below it, the model is echoing
+    #: what it was fitted on: such samples pass a two-sample test trivially and
+    #: add nothing to an augmented set.
+    min_novelty_ratio: float = 0.8
     c2st_folds: int = 5
 
 
@@ -160,6 +171,7 @@ def evaluate_gate(
     real: pd.DataFrame,
     synthetic: pd.DataFrame,
     *,
+    train_reference: pd.DataFrame | None = None,
     thresholds: FidelityThresholds | None = None,
     seed: int = 0,
 ) -> dict[str, Any]:
@@ -167,6 +179,10 @@ def evaluate_gate(
 
     Both sides must already be decoded: the TDD requires domain and
     feature-space checks on the decoded representation, not on angles.
+
+    ``train_reference`` enables the novelty check. It is optional because every
+    previously reported gate result was produced without it, and adding the
+    signal silently would change what those runs mean.
     """
 
     thresholds = thresholds or FidelityThresholds()
@@ -181,6 +197,13 @@ def evaluate_gate(
         thresholds=thresholds,
         seed=seed,
         with_c2st=can_run_c2st,
+    )
+    # Novelty needs the rows the generator was fitted on, which the gate does
+    # not otherwise see. Absent them the criterion is simply not measured.
+    metrics["novelty"] = (
+        novelty_ratio(synthetic, train_reference, real)
+        if train_reference is not None
+        else None
     )
     null = _null_reference(real, thresholds=thresholds, seed=seed)
 
@@ -238,6 +261,16 @@ def evaluate_gate(
             value=metrics["domain"]["valid_fraction"],
             threshold=thresholds.min_domain_validity,
             null=from_null("domain", "valid_fraction"),
+            higher_is_worse=False,
+        ),
+        # Real held-out rows are the reference, so their own ratio is 1 by
+        # construction. There is no sample-size null to compute here.
+        "novelty": _criterion(
+            "novelty",
+            reason="memorised_training_data",
+            value=metrics["novelty"],
+            threshold=thresholds.min_novelty_ratio,
+            null=1.0 if metrics["novelty"] is not None else None,
             higher_is_worse=False,
         ),
     }

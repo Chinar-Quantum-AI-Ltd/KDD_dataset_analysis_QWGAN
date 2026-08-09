@@ -14,7 +14,14 @@ from .domain import (
     check_domain,
 )
 from .gate import GATE_VERSION, FidelityThresholds, evaluate_gate, released
-from .metrics import CHANCE_AUC, c2st_auc, coverage, ks_statistic, wasserstein_1
+from .metrics import (
+    CHANCE_AUC,
+    c2st_auc,
+    coverage,
+    ks_statistic,
+    novelty_ratio,
+    wasserstein_1,
+)
 
 __all__ = [
     "CHANCE_AUC",
@@ -30,6 +37,7 @@ __all__ = [
     "coverage",
     "evaluate_gate",
     "ks_statistic",
+    "novelty_ratio",
     "released",
     "wasserstein_1",
 ]

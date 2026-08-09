@@ -222,6 +222,13 @@ def run_synthesis(
         real_reference = pd.DataFrame(
             contract.decode_angles(contract.validation_angles(attack_class))
         )
+        # The rows the generators were fitted on, for the novelty check. A model
+        # that echoes its training set passes a two-sample test trivially and
+        # contributes nothing to an augmented one.
+        train_rows = contract.angles("train")[
+            contract.families("train") == attack_class
+        ]
+        train_reference = pd.DataFrame(contract.decode_angles(train_rows))
         for seed in plan.seeds:
             checkpoint = plan.checkpoints[attack_class].format(seed=seed)
             parent = _parent_run_id(checkpoint)
@@ -267,6 +274,7 @@ def run_synthesis(
                 gate = evaluate_gate(
                     real_reference,
                     batch.decoded,
+                    train_reference=train_reference,
                     thresholds=thresholds,
                     seed=synthesis_seed,
                 )

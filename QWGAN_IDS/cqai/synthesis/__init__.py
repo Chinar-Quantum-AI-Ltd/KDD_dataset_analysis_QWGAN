@@ -10,6 +10,7 @@ from .generate import (
     SyntheticBatch,
     describe,
     generate_samples,
+    resolve_checkpoint,
     sha256_file,
 )
 from .runner import (
@@ -29,6 +30,7 @@ __all__ = [
     "describe",
     "generate_samples",
     "requested_volume",
+    "resolve_checkpoint",
     "run_synthesis",
     "sha256_file",
 ]

@@ -54,6 +54,20 @@ class TrainingPlan:
     barren_plateau_variance: float = 1e-12
     mode_collapse_ratio: float = 0.1
 
+    #: Stop once the training-side Wasserstein estimate has not reached a new
+    #: best for this many consecutive checks. ``None`` runs the full schedule.
+    #:
+    #: The signal is deliberately the *training* estimate. Stopping on held-out
+    #: performance would be ordinary model selection, but those are the same
+    #: rows the FR-4 gate scores against, and selecting on them would turn the
+    #: gate's verdict into a measure of its own selection.
+    early_stop_patience: int | None = None
+    early_stop_check_every: int = 10
+    #: WGAN dynamics are noisy early on; a dip in epoch two means nothing.
+    early_stop_min_epochs: int = 50
+    #: Relative improvement required to count as a new best.
+    early_stop_tolerance: float = 1e-3
+
     def __post_init__(self) -> None:
         if not self.attack_classes:
             raise ValueError("attack_classes must not be empty")
@@ -67,6 +81,12 @@ class TrainingPlan:
             raise ValueError("batch_size must be at least 1")
         if self.checkpoint_every < 1:
             raise ValueError("checkpoint_every must be at least 1")
+        if self.early_stop_patience is not None and self.early_stop_patience < 1:
+            raise ValueError("early_stop_patience must be at least 1 when set")
+        if self.early_stop_check_every < 1:
+            raise ValueError("early_stop_check_every must be at least 1")
+        if self.early_stop_min_epochs < 1:
+            raise ValueError("early_stop_min_epochs must be at least 1")
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +233,10 @@ def _train_one(
     diversity_ratios: list[float] = []
     last: dict[str, Any] = {}
     steps_per_epoch = 0
+    epochs_completed = 0
+    stop_reason = "schedule_complete"
+    best_wasserstein: float | None = None
+    checks_without_improvement = 0
 
     started = datetime.now(timezone.utc)
     for epoch in range(1, plan.epochs + 1):
@@ -222,6 +246,7 @@ def _train_one(
         if plan.max_steps_per_epoch is not None:
             chunks = chunks[: plan.max_steps_per_epoch]
         steps_per_epoch = len(chunks)
+        epoch_wasserstein: list[float] = []
 
         for step_in_epoch, chunk in enumerate(chunks, start=1):
             metrics = trainer.train_step(chunk)
@@ -234,6 +259,7 @@ def _train_one(
                 float(metrics["generator_gradient_variance"])
             )
             diversity_ratios.append(ratio)
+            epoch_wasserstein.append(float(metrics["wasserstein_estimate"]))
             last = dict(metrics)
 
             record = {
@@ -249,7 +275,36 @@ def _train_one(
             diagnostics.write(json.dumps(record) + "\n")
             diagnostics.flush()
 
-        if epoch % plan.checkpoint_every == 0 or epoch == plan.epochs:
+        epochs_completed = epoch
+        stop_now = False
+
+        if (
+            plan.early_stop_patience is not None
+            and epoch >= plan.early_stop_min_epochs
+            and epoch % plan.early_stop_check_every == 0
+        ):
+            # Lower is better: the estimate should shrink as the generator
+            # closes on the real distribution.
+            current = float(np.mean(epoch_wasserstein))
+            improved = best_wasserstein is None or current < best_wasserstein * (
+                1.0 - plan.early_stop_tolerance
+            )
+            if improved:
+                best_wasserstein = current
+                checks_without_improvement = 0
+            else:
+                checks_without_improvement += 1
+                if checks_without_improvement >= plan.early_stop_patience:
+                    stop_reason = "wasserstein_plateau"
+                    stop_now = True
+
+        # A stopped run must not leave a checkpoint claiming an epoch it never
+        # finished, so the final-epoch checkpoint follows the actual last epoch.
+        if (
+            epoch % plan.checkpoint_every == 0
+            or epoch == plan.epochs
+            or stop_now
+        ):
             trainer.save_checkpoint(
                 checkpoint_dir / f"epoch{epoch:04d}.pt",
                 metadata={
@@ -262,13 +317,23 @@ def _train_one(
                 },
             )
 
+        if stop_now:
+            break
+
     return {
         "attack_class": attack_class,
         "seed": seed,
         "training_rows": training_rows,
         "effective_batch_size": effective_batch_size,
         "steps_per_epoch": steps_per_epoch,
-        "epochs_completed": plan.epochs,
+        "epochs_completed": epochs_completed,
+        "epochs_scheduled": plan.epochs,
+        "early_stopped": epochs_completed < plan.epochs,
+        "stop_reason": stop_reason,
+        #: Named so a reader can confirm the decision did not consume the
+        #: held-out rows the FR-4 gate scores against.
+        "early_stop_signal": "train_wasserstein_estimate",
+        "best_epoch_wasserstein_estimate": best_wasserstein,
         "global_steps": int(trainer.global_step),
         "started_utc": started.isoformat(),
         "completed_utc": datetime.now(timezone.utc).isoformat(),

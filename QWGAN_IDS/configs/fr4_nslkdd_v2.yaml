@@ -1,0 +1,88 @@
+# FR-4 v2 — gating the generators from the v2 FR-3 campaign.
+#
+# Identical to configs/fr4_nslkdd.yaml except for which checkpoints it reads.
+# The thresholds are deliberately unchanged: the point of this run is to score
+# a different generator against the same bar, and moving the bar at the same
+# time would make the comparison meaningless.
+#
+# The checkpoint paths end in `epoch*.pt` rather than a fixed epoch because the
+# v2 campaign used early stopping, so each seed finished on a different epoch
+# (u2r at 160 / 130 / 90, r2l at 200). The wildcard resolves to whichever epoch
+# that seed actually reached.
+#
+# The thresholds below decide whether synthetic data is released to FR-5. They
+# live under version control on purpose: a pass/fail claim is only readable next
+# to the bands that produced it, and every run manifest records this file's
+# resolved values verbatim. Change them in a commit, with a reason, never in an
+# editor buffer before a run.
+#
+# Run it with:
+#   python -m cqai.synthesis.cli --experiment configs/fr4_nslkdd.yaml --dry-run
+#   python -m cqai.synthesis.cli --experiment configs/fr4_nslkdd.yaml
+
+version: "2.0.0"
+
+# --------------------------------------------------------------------------- #
+# Must match the contract the generators were trained against. The CLI refuses
+# a mismatch: gating against different transforms than the model was trained on
+# would compare a sample with something it never had a chance to resemble.
+# --------------------------------------------------------------------------- #
+contract:
+  n_qubits: 10
+  top_k: 20
+  val_fraction: 0.2
+  split_seed: 42
+  transform_seed: 42
+  mi_sample_cap: 20000
+
+# --------------------------------------------------------------------------- #
+# Gate thresholds.
+# --------------------------------------------------------------------------- #
+thresholds:
+  # TDD section 15.1 hard design threshold. 0.5 means indistinguishable.
+  # This one is not a tunable: relaxing it would invalidate OBJ-1.
+  max_c2st_auc: 0.65
+
+  # Applied to the per-feature W-1 normalised by the real column's robust
+  # spread, so one band covers `src_bytes` (thousands) and `same_srv_rate`
+  # (bounded by 1) alike. These three are tolerance bands, not design
+  # thresholds: they are first-pass values and any report that leans on them
+  # must say so.
+  max_wasserstein_1: 0.5
+  max_ks_statistic: 0.2
+  min_coverage: 0.5
+  min_domain_validity: 0.95
+
+  # Below this many held-out real rows the gate returns `insufficient_evidence`
+  # rather than a verdict. NSL-KDD `u2r` has 10 held-out rows, so it is expected
+  # to land here: a C2ST AUC computed against 10 rows cannot certify anything,
+  # and reporting `pass` there would be worse than reporting nothing.
+  min_real_samples: 50
+
+  c2st_folds: 5
+
+# --------------------------------------------------------------------------- #
+# What to synthesise, and how much.
+# --------------------------------------------------------------------------- #
+synthesis:
+  attack_classes:
+    - u2r
+    - r2l
+
+  # FR-6 requires exactly three centrally configured seeds, matching FR-3's.
+  seeds: [13, 42, 1337]
+
+  # Fractions of the majority class. The TDD sweeps 0.2-0.4 and warns explicitly
+  # against naive 1:1 balancing, which over-synthesises and degrades precision.
+  ratios: [0.2, 0.3, 0.4]
+  majority_class: normal
+
+  # One generator per (class, seed), all from the v2 campaign
+  # (latent_scale 0.25, lr 1e-3 — see docs/fr3-generator-diagnosis.md).
+  checkpoints:
+    u2r: artifacts/runs/fr3-nslkdd-v2-001/checkpoints/u2r/seed{seed}/epoch*.pt
+    r2l: artifacts/runs/fr3-nslkdd-v2-001/checkpoints/r2l/seed{seed}/epoch*.pt
+
+  # Samples per simulator call. 0.4 x 53 875 rows broadcast through
+  # default.qubit in one call would allocate roughly 350 MB of statevector.
+  chunk_size: 2048

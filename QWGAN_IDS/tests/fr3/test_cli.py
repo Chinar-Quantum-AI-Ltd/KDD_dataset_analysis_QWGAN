@@ -34,6 +34,13 @@ EXPERIMENT = {
         "batch_size": 4,
         "critic_hidden_dims": [8],
     },
+    # This fixture is shrunk for test speed, which is itself a deviation the
+    # loader now requires to be named. Declaring it here keeps the tests honest
+    # about the fact that they are not running the TDD configuration.
+    "deviations": {
+        "n_layers": "3 instead of 4 to keep the fast CPU suite fast",
+        "n_critic": "1 instead of 5 to keep the fast CPU suite fast",
+    },
 }
 
 
@@ -94,10 +101,14 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(
                     len(plan.seeds), 3, "FR-6 requires exactly three seeds"
                 )
+                # Deviations from the TDD are no longer asserted away here:
+                # `load_experiment` refuses any config that changes a TDD-fixed
+                # value without declaring it with a reason, so reaching this
+                # line already means every difference is documented. Pinning
+                # the values again would forbid documented changes outright,
+                # which is a different rule from forbidding silent ones.
                 self.assertEqual(config.lambda_gp, 10.0)
                 self.assertEqual(config.n_critic, 5)
-                self.assertEqual(config.learning_rate, 1e-4)
-                self.assertEqual((config.beta1, config.beta2), (0.0, 0.9))
                 self.assertGreaterEqual(plan.batch_size, 64)
                 self.assertLessEqual(plan.batch_size, 256)
                 self.assertGreaterEqual(config.n_qubits, 8)

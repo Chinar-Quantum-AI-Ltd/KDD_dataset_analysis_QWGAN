@@ -139,16 +139,81 @@ worth stating plainly — the TDD fixes the latent dimension at the qubit count
 but does not fix its range — and it is recorded here rather than applied
 quietly.
 
+## What the fix actually bought — and the wall behind it
+
+The v2 campaign (`fr3-nslkdd-v2-001`, `latent_scale 0.25`, `lr 1e-3`, 200-epoch
+ceiling with early stopping, 2.6 h) was run and gated (`fr4-nslkdd-v2-001`).
+The latent fix works, and it is not enough.
+
+Training behaved the way it should have the first time. The Wasserstein estimate
+**fell** from 1.44 to 0.70 for `r2l` instead of rising to 1.95 and flattening,
+and the weight rms reached 0.51 instead of staying at its 0.01 initialization.
+`u2r` early-stopped at 160 / 130 / 90 epochs; `r2l` used its full 200 and was
+still improving.
+
+Gate metrics for `r2l`, same thresholds, same held-out rows:
+
+| Criterion | v1 | v2 | Threshold | Null |
+|---|---:|---:|---:|---:|
+| C2ST AUC | 1.0000 | 0.9995 | ≤ 0.65 | 0.4789 |
+| Normalised W-1 (max) | 490.06 | **78.86** | ≤ 0.50 | 14.60 |
+| KS (max) | 0.9943 | **0.6304** | ≤ 0.20 | 0.2525 |
+| Coverage | 0.1566 | **0.5556** | ≥ 0.50 | 0.9697 |
+
+Coverage cleared its threshold outright — the generator now reaches the real
+modes, which it previously did not. W-1 improved six-fold and KS by a third.
+**The C2ST did not move.** Still 18 batches quarantined, still nothing released.
+
+### Why the C2ST stays at 1.0
+
+The failure concentrates in one family of features: `serror_rate`,
+`srv_serror_rate`, `dst_host_srv_serror_rate`, `diff_srv_rate`, `flag_S0` — the
+worst normalised W-1 (78.9) and the worst KS (0.63) are all here.
+
+Decoded, the real `r2l` values in these columns are almost constant while the
+synthetic ones are not:
+
+| Column | real IQR | real std | synthetic std |
+|---|---:|---:|---:|
+| `serror_rate` | 0.0068 | 0.051 | 0.095 |
+| `srv_serror_rate` | 0.0082 | 0.051 | 0.096 |
+| `dst_host_srv_serror_rate` | 0.0068 | 0.048 | 0.095 |
+
+A classifier only has to threshold `|serror_rate| > 0.05` to separate the two
+sets perfectly. That is the whole C2ST.
+
+It is **not** an excess-spread problem in the latent. In the angle domain the v2
+generator is narrower than real on every qubit (std ratio 0.37–0.81). It is a
+*shape* mismatch. The real angle components are sharply peaked with heavy tails
+— on some qubits the interquartile range is 5 % of π while the standard
+deviation is over four times that IQR — so the bulk sits in a spike and a few
+outliers claim the rest of the range. A smooth circuit output spread evenly
+across a comparable range reproduces the standard deviation and none of the
+spike, and after the inverse PCA that difference lands squarely in the
+low-variance columns.
+
+The upstream cause is the FR-2 transform chain: MinMax over heavy-tailed PCA
+components maps the bulk of the data into a narrow sub-interval while rare
+outliers define the endpoints. The generator is being asked to hit a near-delta
+in several dimensions at once. A quantile or rank-based transform in place of
+MinMax would give the generator a target it can actually represent, and that is
+the next lever — a change to the contract, not to the circuit.
+
 ## What this does not establish
 
-- **No retrained generator, no new gate result.** The probes above are
-  diagnostics on `r2l` seed 13, not a campaign. Whether a narrowed latent
-  actually clears the FR-4 gate is unmeasured, and matching two marginal moments
-  is a much weaker claim than passing a C2ST.
-- The learning rate is still almost certainly too low and the update count too
-  small; those are real problems that this change does not address.
-- The probe used an MMD objective the production trainer does not use. It was
+- **Nothing has passed the gate.** v2 improved four of five criteria and cleared
+  one; it released zero batches. No synthetic sample is available to FR-5.
+- The transform-chain hypothesis above is a **hypothesis**. It explains the
+  measurements, but no quantile-transformed contract has been built or trained
+  against, so it is not established.
+- `r2l` was still improving at its 200-epoch ceiling. How much of the remaining
+  gap is schedule and how much is representational is unmeasured.
+- The probes used an MMD objective the production trainer does not use. It was
   chosen to isolate expressivity from adversarial dynamics, not to propose a new
   loss.
-- Only `r2l` was examined in detail. `u2r` shows the same pinned means, but its
-  ten held-out rows cannot support any conclusion either way.
+- Only `r2l` was examined in detail. `u2r` shows the same failures, but its ten
+  held-out rows cannot support any conclusion either way — it returns
+  `insufficient_evidence` in both campaigns and will keep doing so at this
+  split.
+- No hyperparameter search was run. `latent_scale 0.25` and `lr 1e-3` come from
+  a four-point probe and a single-seed pilot, not an optimisation.

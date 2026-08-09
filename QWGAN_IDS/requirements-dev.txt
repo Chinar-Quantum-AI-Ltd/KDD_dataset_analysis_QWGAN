@@ -1,0 +1,8 @@
+# dev/test requirements for FR-6 smoke runs and CI
+pytest
+joblib
+pandas
+numpy
+scikit-learn
+imbalanced-learn
+scipy

@@ -25,6 +25,62 @@ DEFAULT_TRAIN_FILE = Path("datasets/KDDTrain+.txt")
 DEFAULT_CONTRACT_DIR = Path("artifacts/contracts/nslkdd-train-only-v1")
 DEFAULT_OUTPUT_DIR = Path("artifacts/runs")
 
+#: Model values the TDD fixes. A config may still change any of them, but only
+#: by naming the change under ``deviations:`` with a reason. ``AGENTS.md``
+#: requires deviations to be recorded and reported rather than applied quietly,
+#: and enforcing it in the loader means an unreviewed run cannot drift.
+TDD_DEFAULTS: dict[str, Any] = {
+    "n_layers": 4,
+    "lambda_gp": 10.0,
+    "n_critic": 5,
+    "learning_rate": 1e-4,
+    "beta1": 0.0,
+    "beta2": 0.9,
+    "latent_scale": 1.0,
+}
+
+
+def _check_deviations(config: QWGANConfig, declared: dict[str, Any]) -> None:
+    """Refuse a config that changes a TDD value without declaring it."""
+
+    actual = {name: getattr(config, name) for name in TDD_DEFAULTS}
+    deviating = {
+        name for name, value in actual.items() if value != TDD_DEFAULTS[name]
+    }
+    justified = {
+        name
+        for name, reason in declared.items()
+        if isinstance(reason, str) and reason.strip()
+    }
+
+    undeclared = sorted(deviating - justified)
+    if undeclared:
+        raise ValueError(
+            "these values deviate from the TDD without a declaration: "
+            + ", ".join(
+                f"{name} ({actual[name]!r} != {TDD_DEFAULTS[name]!r})"
+                for name in undeclared
+            )
+            + ". Add a `deviations:` entry naming each one with the reason; "
+            "a reported number has to carry the reason it was produced that way."
+        )
+
+    unknown = sorted(set(declared) - set(TDD_DEFAULTS))
+    if unknown:
+        raise ValueError(
+            f"`deviations` names values that are not TDD-fixed: {unknown}"
+        )
+
+    # A declaration for a value that matches the default would sit there
+    # unread and quietly license a future change to it.
+    stale = sorted(set(declared) - deviating - set(unknown))
+    if stale:
+        raise ValueError(
+            f"`deviations` declares {stale}, which does not deviate from the "
+            "TDD; remove the stale entry rather than leaving a standing "
+            "permission slip"
+        )
+
 
 def load_experiment(
     path: str | Path,
@@ -54,6 +110,8 @@ def load_experiment(
             f"model.n_qubits ({config.n_qubits}) must equal contract.n_qubits "
             f"({spec.n_qubits}); the latent width is the qubit count"
         )
+
+    _check_deviations(config, dict(document.get("deviations", {}) or {}))
     return spec, config, plan
 
 

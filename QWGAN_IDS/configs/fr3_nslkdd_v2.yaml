@@ -1,0 +1,99 @@
+# FR-3 v2 — the configuration the generator diagnosis points at.
+#
+# The v1 campaign (configs/fr3_nslkdd.yaml) produced generators whose per-qubit
+# output mean was pinned at pi/2, and every one of their batches was quarantined
+# by the FR-4 gate. docs/fr3-generator-diagnosis.md establishes the cause with
+# measurements: data re-uploading applies RY(noise) at every layer, so a latent
+# spanning [0, pi] accumulates up to 4*pi of rotation over four layers and the
+# Pauli-Z expectation averages to zero regardless of the weights.
+#
+# v1 is kept as shipped. It is the configuration the reported v1 numbers came
+# from, and rewriting it would orphan those manifests.
+#
+# Run it with:
+#   python -m cqai.qwgan.cli --experiment configs/fr3_nslkdd_v2.yaml
+
+version: "2.0.0"
+
+# --------------------------------------------------------------------------- #
+# Unchanged from v1: same contract, so v1 and v2 generators are comparable and
+# the FR-4 gate can score both against the same held-out real rows.
+# --------------------------------------------------------------------------- #
+contract:
+  n_qubits: 10
+  top_k: 20
+  val_fraction: 0.2
+  split_seed: 42
+  transform_seed: 42
+  mi_sample_cap: 20000
+
+model:
+  n_qubits: 10
+  n_layers: 4
+  backend: default.qubit
+  diff_method: backprop
+  lambda_gp: 10.0
+  n_critic: 5
+  beta1: 0.0
+  beta2: 0.9
+
+  # --- deviations from the TDD, declared below --- #
+  latent_scale: 0.25
+  learning_rate: 0.001
+
+# --------------------------------------------------------------------------- #
+# Every value here differs from a TDD default and must say why. The loader
+# refuses the config otherwise, so a reported number always carries the reason
+# it was produced that way.
+# --------------------------------------------------------------------------- #
+deviations:
+  latent_scale: >-
+    The TDD fixes the latent dimension at the qubit count but not its range.
+    At the full [0, pi] range the re-uploading wraps the Bloch sphere twice and
+    pins every qubit's output mean at pi/2: scaling an untrained circuit's
+    weights by 50x moves that mean by less than 0.005 rad, while changing the
+    latent range moves it immediately. At 0.25 a direct-fit probe cut the
+    per-qubit mean error from 1.51 to 0.30 and the generated means covered the
+    real span (0.387-2.046 against 0.411-1.994). See
+    docs/fr3-generator-diagnosis.md.
+  learning_rate: >-
+    1e-4 is the WGAN-GP convention for classical networks and leaves this
+    120-parameter circuit at its initialization: after 390 steps the v1 weight
+    rms went from 0.0102 to 0.0099, against a theoretical ceiling of 0.039 rad
+    of travel. A single-seed pilot at 1e-3 moved the weight rms to 0.51 over 100
+    epochs and drove the per-qubit mean error from 1.65 to 0.38, with the
+    Wasserstein estimate falling from 1.59 to 0.81 rather than rising as it did
+    under v1.
+
+# --------------------------------------------------------------------------- #
+# Experiment shape.
+# --------------------------------------------------------------------------- #
+training:
+  attack_classes:
+    - u2r
+    - r2l
+  seeds: [13, 42, 1337]
+
+  # The pilot was still improving at epoch 100 (mean error 0.52 -> 0.43 -> 0.38
+  # over the last 30), so 100 is known to be short of convergence. 200 is a
+  # budget decision rather than a measured optimum, and the stability report
+  # will say whether the seeds agree at it.
+  epochs: 200
+  batch_size: 64
+  checkpoint_every: 25
+  critic_hidden_dims: [128, 64]
+  barren_plateau_variance: 1.0e-12
+  mode_collapse_ratio: 0.1
+
+  # 200 is a ceiling, not a promise. Training stops once the training-side
+  # Wasserstein estimate has not reached a new best for three consecutive
+  # checks, so a seed that flattens early stops paying for epochs that do
+  # nothing. The signal is the *training* estimate on purpose: the held-out
+  # rows are what the FR-4 gate scores against, and selecting on them would
+  # make the gate's verdict a measure of its own selection.
+  early_stop_patience: 3
+  early_stop_check_every: 10
+  # The pilot was still improving through epoch 100, so stopping before 60
+  # would cut off a run that is still learning.
+  early_stop_min_epochs: 60
+  early_stop_tolerance: 0.001

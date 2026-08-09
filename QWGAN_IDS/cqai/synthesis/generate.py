@@ -45,6 +45,36 @@ class SyntheticBatch:
         return int(self.angles.shape[0])
 
 
+def resolve_checkpoint(pattern: str | Path) -> Path:
+    """Resolve a checkpoint path that may end in a wildcard.
+
+    Early stopping means each seed finishes on a different epoch, so a template
+    with a fixed epoch number points at nothing for some seeds. A pattern such
+    as ``.../seed13/epoch*.pt`` resolves to the highest epoch present.
+
+    Ordering is numeric rather than lexicographic: the runner zero-pads, but
+    relying on that would break quietly the first time something else writes a
+    checkpoint without padding.
+    """
+
+    path = Path(pattern)
+    if "*" not in str(pattern):
+        if not path.is_file():
+            raise FileNotFoundError(f"no checkpoint at {path}")
+        return path
+
+    matches = sorted(
+        path.parent.glob(path.name),
+        key=lambda candidate: (
+            int("".join(ch for ch in candidate.stem if ch.isdigit()) or -1),
+            candidate.name,
+        ),
+    )
+    if not matches:
+        raise FileNotFoundError(f"no checkpoint matching {pattern}")
+    return matches[-1]
+
+
 def sha256_file(path: str | Path) -> str:
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -68,7 +98,7 @@ def generate_samples(
     if chunk_size < 1:
         raise ValueError("chunk_size must be positive")
 
-    path = Path(checkpoint)
+    path = resolve_checkpoint(checkpoint)
     trainer, metadata = QWGANTrainer.load_checkpoint(path)
 
     recorded = metadata.get("contract_source_sha256")

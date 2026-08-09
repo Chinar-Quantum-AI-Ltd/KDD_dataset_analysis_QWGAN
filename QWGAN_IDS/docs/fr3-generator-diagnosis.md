@@ -199,6 +199,95 @@ in several dimensions at once. A quantile or rank-based transform in place of
 MinMax would give the generator a target it can actually represent, and that is
 the next lever — a change to the contract, not to the circuit.
 
+## The real bottleneck: the target is multimodal, and moments cannot reach it
+
+Two further hypotheses were tested and **both were wrong**. They are recorded
+because the pattern they form is the actual finding.
+
+### Refuted: the transform squeezes the target
+
+If MinMax over heavy-tailed PCA components were the problem, a quantile map
+should help. It measurably improves the target's shape — bulk IQR 0.14π → 0.35π,
+excess kurtosis +3.32 → +1.36, inverse round-trip error 3e-13 — and makes the
+fit **worse**:
+
+| Transform | mean L2 | std ratio | C2ST | coverage |
+|---|---:|---:|---:|---:|
+| MinMax | 0.4069 | 0.660 | 0.9990 | 0.1212 |
+| quantile | 1.3786 | 0.361 | 1.0000 | 0.0303 |
+
+The quantile target is 2.3× wider, and the circuit was already short on spread.
+A prettier target it cannot reach is not an improvement.
+
+### Refuted: entanglement crushes the spread
+
+A CNOT ring after every layer does concentrate the local expectations, badly.
+Measured on an untrained 10-qubit, 4-layer circuit at weight magnitudes matching
+a trained model:
+
+| CNOT ring on | std ⟨Z⟩ | mean span |
+|---|---:|---:|
+| every layer (TDD) | 0.0285 | 0.0567 |
+| last layer only | 0.1110 | 0.3304 |
+| no layer | 0.4408 | 1.1497 |
+| **real `r2l` needs** | **0.181** | **1.008** |
+
+Removing it transforms the marginals — std ratio 0.66 → **0.953**, mean error
+0.407 → **0.125**, coverage 0.121 → 0.157. And the C2ST does not move:
+0.9990 → 0.9978.
+
+### What that pattern means
+
+The C2ST is inert to every intervention tried:
+
+| Intervention | C2ST |
+|---|---|
+| latent range (v1 → v2) | 1.0000 → 0.9995 |
+| transform (MinMax → quantile) | 0.9990 → 1.0000 |
+| entanglement (every layer → none) | 0.9990 → 0.9978 |
+
+Because none of them addresses the actual gap. Three reference points locate it:
+
+| | C2ST |
+|---|---:|
+| real train vs real val — **the achievable floor** | **0.5227** |
+| a Gaussian with the real mean and full covariance | 0.9881 |
+| the v2 generator | 0.9978 |
+
+The target is reachable: real data scores 0.52 against itself. But a distribution
+matching the real mean **and full covariance exactly** still scores 0.988. No
+model that gets the first two moments right can pass this gate, and our generator
+is already essentially at that ceiling.
+
+The reason is that the real `r2l` angle distribution is strongly multimodal.
+Fitting Gaussian mixtures to the 797 training rows, BIC falls monotonically and
+is still falling at twelve components:
+
+| components | 1 | 2 | 3 | 5 | 8 | 12 |
+|---|---:|---:|---:|---:|---:|---:|
+| BIC | −4 693 | −14 608 | −23 517 | −32 065 | −36 863 | −42 782 |
+
+with mean \|skew\| 0.70 and mean excess kurtosis +3.32 across qubits. Discreteness
+is not the explanation — all 797 rows are distinct in every dimension, with no
+repeated values.
+
+A smooth circuit driven by uniform latent noise produces one broad blob. The
+target is a dozen-plus separated clusters. Every intervention so far moved the
+blob's centre and width; none of them could give it modes.
+
+### What that implies for the next attempt
+
+- The latent has to carry mode information. A continuous uniform latent cannot
+  induce multimodality through a smooth map; a discrete or mixed latent (a
+  computational-basis mode selector, or per-class mixture components) can.
+- Or the difficulty is upstream: 797 rows forming twelve-plus modes in ten
+  dimensions is roughly sixty samples per mode, learned adversarially. That may
+  simply be under-determined, in which case no generator architecture rescues it
+  and the honest answer is that NSL-KDD `r2l` is too small at this split.
+- Either way, further tuning of latent range, learning rate, entanglement or the
+  transform is not worth spending compute on. Those levers are exhausted, and the
+  measurements above say why.
+
 ## What this does not establish
 
 - **Nothing has passed the gate.** v2 improved four of five criteria and cleared

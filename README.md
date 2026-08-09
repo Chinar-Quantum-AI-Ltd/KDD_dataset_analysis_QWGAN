@@ -197,9 +197,13 @@ The current script is an exploratory FR-1/FR-2 pipeline. It is not the final lea
 > that fix trained properly — the Wasserstein estimate fell instead of rising —
 > and improved four of five gate criteria, clearing coverage outright. **The
 > C2ST AUC stayed at ~1.0 and all 18 batches were quarantined again.** The
-> remaining failure concentrates in the `serror_rate` family, where the decoded
-> real data is nearly constant and the generator is not; the evidence points
-> upstream at MinMax over heavy-tailed PCA components. All of it is measured in
+> remaining failure is now located: the real `r2l` angle distribution is
+> strongly multimodal (BIC still falling at twelve mixture components), and a
+> distribution matching its mean and **full covariance exactly** still scores a
+> C2ST of 0.988 against an achievable floor of 0.523. No model that gets the
+> first two moments right can pass, and the generator is already at that
+> ceiling — which is why latent range, transform and entanglement changes all
+> left the C2ST at ~1.0. All of it is measured in
 > [`docs/fr3-generator-diagnosis.md`](QWGAN_IDS/docs/fr3-generator-diagnosis.md).
 > No synthetic sample is available to FR-5.
 

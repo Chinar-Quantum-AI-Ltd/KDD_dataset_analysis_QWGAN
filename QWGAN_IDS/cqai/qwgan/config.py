@@ -30,6 +30,20 @@ class QWGANConfig:
     #: The default stays 1.0 so no previously reported run changes meaning; a
     #: config must opt in, and the manifest records which value was used.
     latent_scale: float = 1.0
+    #: Which layer indices get a CNOT ring. ``None`` means every layer, which
+    #: is the TDD's hardware-efficient structure and stays the default.
+    #:
+    #: A ring after every layer drives the single-qubit reduced states toward
+    #: maximally mixed, so the local Pauli-Z expectations concentrate at zero:
+    #: measured on a 10-qubit, 4-layer circuit, the per-qubit output spread is
+    #: 0.028 with the full ring against 0.441 with none, while the real ``r2l``
+    #: data needs 0.181. Entangling only the last layer gives 0.111.
+    #:
+    #: Reducing it is a real trade: the correlations a ring buys are worth
+    #: little after PCA has already decorrelated the components, but an empty
+    #: tuple leaves a separable circuit that is classically trivial to simulate
+    #: and forfeits the quantum claim. See ``docs/fr3-generator-diagnosis.md``.
+    entangling_layers: tuple[int, ...] | None = None
 
     def __post_init__(self) -> None:
         if not 8 <= self.n_qubits <= 12:
@@ -46,3 +60,11 @@ class QWGANConfig:
         # fitted on and wrap the Bloch sphere even harder.
         if not 0 < self.latent_scale <= 1:
             raise ValueError("latent_scale must be in (0, 1]")
+        if self.entangling_layers is not None:
+            layers = tuple(self.entangling_layers)
+            if len(set(layers)) != len(layers):
+                raise ValueError("entangling_layers must not repeat a layer")
+            if any(not 0 <= layer < self.n_layers for layer in layers):
+                raise ValueError(
+                    f"entangling_layers must index layers 0..{self.n_layers - 1}"
+                )

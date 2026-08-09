@@ -28,6 +28,12 @@ class QuantumGenerator(nn.Module):
 
     def _build_circuit(self):
         n_qubits = self.config.n_qubits
+        # ``None`` keeps the TDD structure: a CNOT ring after every layer.
+        entangling = (
+            frozenset(range(self.config.n_layers))
+            if self.config.entangling_layers is None
+            else frozenset(self.config.entangling_layers)
+        )
 
         @qml.qnode(
             self.device,
@@ -40,8 +46,9 @@ class QuantumGenerator(nn.Module):
                     # Data re-uploading: the same noise angle enters every layer.
                     qml.RY(noise[..., wire], wires=wire)
                     qml.Rot(*weights[layer, wire], wires=wire)
-                for wire in range(n_qubits):
-                    qml.CNOT(wires=[wire, (wire + 1) % n_qubits])
+                if layer in entangling:
+                    for wire in range(n_qubits):
+                        qml.CNOT(wires=[wire, (wire + 1) % n_qubits])
             return tuple(qml.expval(qml.PauliZ(wire)) for wire in range(n_qubits))
 
         return circuit

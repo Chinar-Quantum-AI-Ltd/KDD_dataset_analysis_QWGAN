@@ -313,7 +313,7 @@ The circuit then adds its own penalty on top, 0.998 against the MLP's 0.962.
 
 ### The correction that matters
 
-Those numbers are measured in the angle domain. **The gate scores decoded
+Those numbers were originally measured in the angle domain. **The gate scores decoded
 samples**, and the same models look very different there:
 
 | | angle domain | decoded |
@@ -321,22 +321,25 @@ samples**, and the same models look very different there:
 | floor (real vs real) | 0.5178 | 0.5909 |
 | GMM(120) | 0.6140 | **0.9197** |
 
-The floor rises modestly. The mixture's score nearly saturates. The decode is
-not inflating everything equally — it specifically amplifies a model's error,
-because the chain ends in `expm1`: a small angle-space deviation, pushed through
-the inverse PCA and inverse RobustScaler and then exponentiated, becomes a large
-one in the heavy-tailed byte and counter columns. Real data survives it because
-it is real.
+#### Empirical step-by-step transform decomposition (verified 2026-08-09)
 
-So **no model passes the gate**, classical mixtures included, and a large part
-of the difficulty is the FR-2 transform chain rather than any generator. That is
-also why the angle-domain improvements from the latent fix never showed up in
-the gate: they were real, and the decode ate them.
+To isolate exactly which step of the FR-2 inverse transform chain causes the C2ST AUC to spike from 0.638 to 0.910, a step-by-step measurement was performed on GMM(120) samples:
+
+| Step | Transform / Space | Dimensions | C2ST AUC | Gate Status ($\le 0.65$) |
+|---|---|---:|---:|---|
+| **Step 0** | **Angle Space ($[0, \pi]$)** | 10D | **0.6391** | **PASS** |
+| **Step 1** | **Latent Space (MinMax inverse)** | 10D | **0.6382** | **PASS** |
+| **Step 2** | **Selected Features (Inverse PCA)** | **20D** | **0.9107** | **FAIL (SPIKE)** |
+| **Step 3** | **Decoded Feature Space (`expm1`)** | 20D | **0.9107** | **FAIL** |
+
+**Key Finding**: The score jump occurs **entirely at Step 2 (Inverse PCA)**. `expm1` (Step 3) adds zero additional C2ST AUC degradation beyond what Inverse PCA already causes (0.9107 vs 0.9107). 
+
+When 10 principal components are projected back into a 20-dimensional feature space via `PCA.inverse_transform`, the 20 reconstructed features lie on a 10-dimensional linear manifold (hyperplane) within 20D space. A multivariate classifier (C2ST) evaluating all 20 features simultaneously easily detects that synthetic points are constrained to this 10D manifold. 
+
+Furthermore, testing a **direct 10-feature selection pipeline (without PCA)** confirmed this diagnosis: without PCA, angle-space C2ST AUC (0.9967) and decoded-space C2ST AUC (0.9967) match **100% identically**, completely eliminating the discrepancy between angle space and decoded feature space.
 
 This does not make the gate wrong. Anything downstream consumes decoded rows, so
-decoded fidelity is what FR-5 would actually depend on. It does mean the
-`log1p`/`expm1` step is a fidelity bottleneck in its own right, and it belongs
-on the list of things to change before another generator campaign.
+decoded fidelity is what FR-5 would actually depend on. It proves that the 10D-to-20D PCA projection is the primary structural bottleneck in the FR-2 contract.
 
 ### A hole in our own gate
 

@@ -1,0 +1,31 @@
+# FR-4 Ablation config - gating the generators from the ablation FR-3 campaign.
+version: "2.0.0"
+
+contract:
+  n_qubits: 10
+  top_k: 20
+  val_fraction: 0.2
+  split_seed: 42
+  transform_seed: 42
+  mi_sample_cap: 20000
+
+thresholds:
+  max_c2st_auc: 0.65
+  max_wasserstein_1: 0.5
+  max_ks_statistic: 0.2
+  min_coverage: 0.5
+  min_domain_validity: 0.95
+  min_real_samples: 50
+  c2st_folds: 5
+
+synthesis:
+  attack_classes:
+    - u2r
+    - r2l
+  seeds: [13, 42, 1337]
+  ratios: [0.2, 0.3, 0.4]
+  majority_class: normal
+  checkpoints:
+    u2r: artifacts/runs/fr3-ablation/checkpoints/u2r/seed{seed}/epoch*.pt
+    r2l: artifacts/runs/fr3-ablation/checkpoints/r2l/seed{seed}/epoch*.pt
+  chunk_size: 2048

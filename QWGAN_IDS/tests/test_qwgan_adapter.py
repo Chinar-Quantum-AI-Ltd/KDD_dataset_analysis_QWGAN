@@ -1,17 +1,17 @@
-from QWGAN_IDS.src.qwgan_adapter import QWGANAdapter, FakeQWGANAdapter
-import pytest
+import unittest
 import numpy as np
+from src.qwgan_adapter import QWGANAdapter, FakeQWGANAdapter
 
 
-def test_qwgan_adapter_raises_when_no_checkpoint():
-    with pytest.raises(RuntimeError) as exc:
-        QWGANAdapter()
-    assert 'PennyLane' in str(exc.value) or 'checkpoint' in str(exc.value)
+class TestQWGANAdapter(unittest.TestCase):
+    def test_qwgan_adapter_raises_when_no_checkpoint(self):
+        with self.assertRaises(RuntimeError) as exc:
+            QWGANAdapter()
+        self.assertTrue('PennyLane' in str(exc.exception) or 'checkpoint' in str(exc.exception))
 
-
-def test_fake_qwgan_adapter_generate_shape():
-    n_features = 8
-    fake = FakeQWGANAdapter(n_features=n_features)
-    samples = fake.generate(10, seed=42)
-    assert isinstance(samples, np.ndarray)
-    assert samples.shape == (10, n_features)
+    def test_fake_qwgan_adapter_generate_shape(self):
+        n_features = 8
+        fake = FakeQWGANAdapter(n_features=n_features)
+        samples = fake.generate(10, seed=42)
+        self.assertIsInstance(samples, np.ndarray)
+        self.assertEqual(samples.shape, (10, n_features))

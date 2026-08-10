@@ -6,7 +6,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Any
 
-from QWGAN_IDS.src.transform_bundle import TransformBundle
+from src.transform_bundle import TransformBundle
 
 
 class OnlineFeatureTransformer:

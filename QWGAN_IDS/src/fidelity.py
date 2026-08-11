@@ -14,6 +14,7 @@ from scipy.spatial.distance import jensenshannon
 from sklearn.ensemble import RandomForestClassifier
 from copy import deepcopy
 
+from QWGAN_IDS.src.metrics import compute_classification_metrics
 from src.metrics import compute_classification_metrics
 
 

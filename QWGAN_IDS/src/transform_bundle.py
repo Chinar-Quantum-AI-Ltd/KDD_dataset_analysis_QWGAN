@@ -25,9 +25,9 @@ import numpy as np
 import pandas as pd
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.loader import COLUMN_NAMES
-from src.encoding import log1p_transform, inverse_log1p, numeric_cols_of, categorical_cols_of
-from src.preprocessing import verify_schema, CONTINUOUS_COLS, CATEGORICAL_COLS, BINARY_COLS
+from QWGAN_IDS.src.loader import COLUMN_NAMES
+from QWGAN_IDS.src.encoding import log1p_transform, inverse_log1p, numeric_cols_of, categorical_cols_of
+from QWGAN_IDS.src.preprocessing import verify_schema, CONTINUOUS_COLS, CATEGORICAL_COLS, BINARY_COLS
 
 
 @dataclass

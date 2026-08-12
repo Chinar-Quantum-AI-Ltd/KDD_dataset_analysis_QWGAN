@@ -1,5 +1,5 @@
 """
-TransformBundle class for FR-7.
+TransformBundle class for FR-7: Registered Transform Bundle for Live Inference.
 
 This wraps the existing FR-1/FR-2 fitted artifacts and provides train/serve
 compatible transformations, latent/angle encoding, and inverse paths where
@@ -14,6 +14,9 @@ The bundle expects the repository artifacts to contain:
 - data/latent_features.npy
 
 If some artifacts are missing, the bundle raises informative errors.
+
+No preprocessing objects are fitted during transform() or any live inference path.
+All parameters come from the registered bundle created at training time.
 """
 from __future__ import annotations
 
@@ -32,6 +35,43 @@ from src.preprocessing import verify_schema, CONTINUOUS_COLS, CATEGORICAL_COLS, 
 
 @dataclass
 class TransformBundle:
+    """
+    Serializable bundle containing fitted preprocessing, encoding, and dimensionality
+    reduction objects for live inference.
+    
+    The bundle provides a unified transform(df_raw_flow) interface that converts
+    raw network-flow features into the exact normalized representation expected by
+    registered classifiers.
+    
+    Attributes
+    ----------
+    encoder : object
+        Fitted OneHotEncoder for categorical features.
+    scaler : object
+        Fitted RobustScaler for numeric features (applied after log1p).
+    pca : object
+        Fitted PCA for dimensionality reduction to latent space.
+    feature_names : List[str]
+        Exact column order after encoding (numeric + one-hot categorical).
+    selected_feature_names : List[str]
+        Top-k features selected by mutual information before PCA.
+    latent_training : Optional[np.ndarray]
+        Training latent features (used to compute angle scaling bounds).
+    angle_min : Optional[np.ndarray]
+        Per-dimension minimum angle scaling factors.
+    angle_max : Optional[np.ndarray]
+        Per-dimension maximum angle scaling factors.
+    bundle_version : str
+        Version of this bundle class.
+    schema_version : str
+        Version of the NSL-KDD schema (43 columns).
+    dataset : str
+        Dataset identifier ("NSL-KDD").
+    created_at : Optional[str]
+        Timestamp when the bundle was created.
+    artifact_versions : Dict[str, Any]
+        Metadata about artifact versions/hashes.
+    """
     # fitted objects
     encoder: Any
     scaler: Any
@@ -49,7 +89,7 @@ class TransformBundle:
     angle_max: Optional[np.ndarray] = None
 
     # metadata
-    bundle_version: str = "0.1"
+    bundle_version: str = "1.0"
     schema_version: str = "NSL-KDD-43"
     dataset: str = "NSL-KDD"
     created_at: Optional[str] = None
@@ -62,7 +102,31 @@ class TransformBundle:
     latent_dim: int = 0
 
     @classmethod
-    def load_from_artifacts(cls, artifacts_dir: str = "artifacts", data_dir: str = "data") -> "TransformBundle":
+    def load_from_artifacts(
+        cls,
+        artifacts_dir: str = "artifacts",
+        data_dir: str = "data"
+    ) -> "TransformBundle":
+        """
+        Load a TransformBundle from fitted artifacts on disk.
+        
+        Parameters
+        ----------
+        artifacts_dir : str
+            Directory containing encoder.pkl, robust_scaler.pkl, pca.pkl, feature_names.json
+        data_dir : str
+            Directory containing selected_feature_names.npy, latent_features.npy
+            
+        Returns
+        -------
+        TransformBundle
+            Fully initialized bundle with all artifacts loaded.
+            
+        Raises
+        ------
+        FileNotFoundError
+            If any required artifact is missing.
+        """
         art = Path(artifacts_dir)
         data = Path(data_dir)
 
@@ -116,32 +180,181 @@ class TransformBundle:
             angle_max=angle_max,
         )
 
-        bundle.categorical_columns = [c for c in feature_names if any(c.startswith(cat + "_") for cat in CATEGORICAL_COLS)]
+        # Derive internal state
+        bundle.categorical_columns = [
+            c for c in feature_names
+            if any(c.startswith(cat + "_") for cat in CATEGORICAL_COLS)
+        ]
         # numerical columns are those in CONTINUOUS_COLS + BINARY_COLS intersect feature_names
-        bundle.numerical_columns = [c for c in feature_names if c in (CONTINUOUS_COLS + BINARY_COLS)]
+        bundle.numerical_columns = [
+            c for c in feature_names
+            if c in (CONTINUOUS_COLS + BINARY_COLS)
+        ]
         bundle.feature_order = feature_names
-        bundle.latent_dim = int(bundle.pca.n_components) if bundle.pca is not None else (bundle.latent_training.shape[1] if bundle.latent_training is not None else 0)
+        bundle.latent_dim = (
+            int(bundle.pca.n_components)
+            if bundle.pca is not None
+            else (bundle.latent_training.shape[1] if bundle.latent_training is not None else 0)
+        )
 
         return bundle
 
-    def save(self, path: str):
+    def save(self, path: str) -> None:
+        """
+        Serialize the bundle to disk using joblib.
+        
+        Parameters
+        ----------
+        path : str
+            Destination file path.
+        """
         joblib.dump(self, path)
 
     @classmethod
     def load(cls, path: str) -> "TransformBundle":
+        """
+        Deserialize a bundle from disk.
+        
+        Parameters
+        ----------
+        path : str
+            Path to the .joblib file.
+            
+        Returns
+        -------
+        TransformBundle
+            Loaded bundle object.
+            
+        Raises
+        ------
+        ValueError
+            If the loaded object is not a TransformBundle.
+        """
         obj = joblib.load(path)
         if not isinstance(obj, cls):
             raise ValueError("Loaded object is not a TransformBundle")
         return obj
 
-    # ----------------------------- validation ------------------------------
+    # ============================== VALIDATION ============================== #
+
     def validate_schema(self, df: pd.DataFrame) -> dict:
-        # reuse preprocessing.verify_schema
+        """
+        Validate that the input dataframe matches the 43-column NSL-KDD schema.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input dataframe to validate.
+            
+        Returns
+        -------
+        dict
+            Validation results dictionary.
+            
+        Raises
+        ------
+        ValueError
+            If schema validation fails.
+        """
         return verify_schema(df, strict=True)
 
-    # ----------------------------- forward transforms ---------------------
+    def _validate_raw_input(self, df: pd.DataFrame) -> dict:
+        """
+        Deep validation of raw input dataframe before transformation.
+        
+        Detects and reports:
+        - missing columns
+        - unexpected columns
+        - invalid datatypes
+        - NaN / Inf values
+        - invalid categorical values
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Raw input dataframe.
+            
+        Returns
+        -------
+        dict
+            Validation report.
+            
+        Raises
+        ------
+        ValueError
+            If critical validation issues are detected.
+        """
+        report = {
+            "schema_valid": False,
+            "missing_columns": [],
+            "unexpected_columns": [],
+            "invalid_dtypes": [],
+            "nan_issues": [],
+            "inf_issues": [],
+            "invalid_categories": [],
+        }
+
+        # Check schema
+        try:
+            self.validate_schema(df)
+            report["schema_valid"] = True
+        except ValueError as e:
+            raise ValueError(f"Schema validation failed: {e}")
+
+        # Check for NaN in any column
+        nan_cols = df.columns[df.isna().any()].tolist()
+        if nan_cols:
+            report["nan_issues"] = nan_cols
+            raise ValueError(f"Found NaN in columns: {nan_cols}")
+
+        # Check for Inf in numeric columns
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        for col in numeric_cols:
+            if np.isinf(df[col]).any():
+                report["inf_issues"].append(col)
+        if report["inf_issues"]:
+            raise ValueError(f"Found Inf in columns: {report['inf_issues']}")
+
+        # Check categorical values
+        for cat_col in CATEGORICAL_COLS:
+            if cat_col in df.columns:
+                # Get unique values seen during encoding
+                try:
+                    fitted_categories = self.encoder.categories_
+                    cat_idx = CATEGORICAL_COLS.index(cat_col)
+                    allowed = set(fitted_categories[cat_idx])
+                    actual = set(df[cat_col].unique())
+                    invalid = actual - allowed
+                    if invalid:
+                        report["invalid_categories"].append({
+                            "column": cat_col,
+                            "invalid_values": list(invalid),
+                        })
+                        # Note: encoder has handle_unknown="ignore", so it won't fail
+                        # but we report it anyway
+                except Exception:
+                    pass
+
+        return report
+
+    # ========================== FORWARD TRANSFORMS ========================== #
+
     def _encode_categorical(self, df: pd.DataFrame) -> pd.DataFrame:
-        # encoder expects categorical columns in order
+        """
+        Apply the fitted OneHotEncoder to categorical columns.
+        
+        No fitting happens here; only transform.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input dataframe with categorical columns.
+            
+        Returns
+        -------
+        pd.DataFrame
+            One-hot encoded categorical columns.
+        """
         cat_cols = [c for c in CATEGORICAL_COLS if c in df.columns]
         encoded = self.encoder.transform(df[cat_cols])
         cat_names = self.encoder.get_feature_names_out(cat_cols)
@@ -149,7 +362,21 @@ class TransformBundle:
         return cat_df
 
     def _scale_numeric(self, df: pd.DataFrame) -> pd.DataFrame:
-        # apply log1p then scaler.transform
+        """
+        Apply log1p and the fitted RobustScaler to numeric columns.
+        
+        No fitting happens here; only transform.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input dataframe with numeric columns.
+            
+        Returns
+        -------
+        pd.DataFrame
+            Scaled numeric columns.
+        """
         num_cols = [c for c in (CONTINUOUS_COLS + BINARY_COLS) if c in df.columns]
         if len(num_cols) == 0:
             return pd.DataFrame(index=df.index)
@@ -158,106 +385,248 @@ class TransformBundle:
         num_df = pd.DataFrame(scaled, columns=num_cols, index=df.index)
         return num_df
 
-    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Return the encoded+scaled full feature matrix in the same ordering as training."""
-        self.validate_schema(df)
-        num_df = self._scale_numeric(df)
-        cat_df = self._encode_categorical(df)
-        # concat in feature order
+    def transform(self, df_raw_flow: pd.DataFrame) -> pd.DataFrame:
+        """
+        Transform raw network-flow features into the encoded+scaled representation.
+        
+        This is the primary entry point for live inference. It applies:
+        1. Schema validation
+        2. Numeric scaling (log1p + RobustScaler)
+        3. Categorical encoding (OneHotEncoder)
+        4. Feature reordering to match training
+        
+        Parameters
+        ----------
+        df_raw_flow : pd.DataFrame
+            Raw input dataframe with 43-column NSL-KDD schema.
+            
+        Returns
+        -------
+        pd.DataFrame
+            Encoded and scaled feature matrix in training feature order.
+            
+        Raises
+        ------
+        ValueError
+            If schema validation fails or transformed output has incorrect shape.
+        """
+        # Validate raw input
+        self._validate_raw_input(df_raw_flow)
+
+        # Transform numerics and categoricals
+        num_df = self._scale_numeric(df_raw_flow)
+        cat_df = self._encode_categorical(df_raw_flow)
+
+        # Concatenate
         full = pd.concat([num_df, cat_df], axis=1)
-        # ensure ordering matches saved feature_names
+
+        # Verify all expected features are present
         missing = [c for c in self.feature_order if c not in full.columns]
         if missing:
-            raise ValueError(f"Transformed feature matrix missing columns expected by bundle: {missing}")
-        full = full[self.feature_order]
-        # deterministic: ensure dtype
-        return full
+            raise ValueError(
+                f"Transformed feature matrix missing columns expected by bundle: {missing}"
+            )
 
-    def transform_to_latent(self, df: pd.DataFrame) -> np.ndarray:
-        X = self.transform(df)
-        # select top features before PCA
-        missing_selected = [c for c in self.selected_feature_names if c not in X.columns]
+        # Reorder to match training
+        full = full[self.feature_order]
+
+        # Ensure deterministic dtype
+        return full.astype(np.float64)
+
+    def transform_to_latent(self, df_raw_flow: pd.DataFrame) -> np.ndarray:
+        """
+        Transform raw features to the 10-dimensional latent space via PCA.
+        
+        Parameters
+        ----------
+        df_raw_flow : pd.DataFrame
+            Raw input dataframe.
+            
+        Returns
+        -------
+        np.ndarray
+            Shape (n_samples, latent_dim) with dtype float32.
+            
+        Raises
+        ------
+        ValueError
+            If PCA is not available or latent dimension is incorrect.
+        """
+        X = self.transform(df_raw_flow)
+
+        # Select top features before PCA
+        missing_selected = [
+            c for c in self.selected_feature_names if c not in X.columns
+        ]
         if missing_selected:
-            raise ValueError(f"Selected features missing from transformed matrix: {missing_selected}")
+            raise ValueError(
+                f"Selected features missing from transformed matrix: {missing_selected}"
+            )
+
         X_top = X[self.selected_feature_names]
+
         if self.pca is None:
             raise ValueError("No PCA model available in bundle for latent transform")
+
         latent = self.pca.transform(X_top.values)
+
         if latent.shape[1] != self.latent_dim:
-            raise ValueError(f"Latent dimension mismatch: expected {self.latent_dim}, got {latent.shape[1]}")
+            raise ValueError(
+                f"Latent dimension mismatch: expected {self.latent_dim}, got {latent.shape[1]}"
+            )
+
         return latent.astype(np.float32)
 
-    def transform_to_angles(self, df: pd.DataFrame, eps: float = 1e-8) -> np.ndarray:
-        latent = self.transform_to_latent(df)
+    def transform_to_angles(
+        self, df_raw_flow: pd.DataFrame, eps: float = 1e-8
+    ) -> np.ndarray:
+        """
+        Transform raw features to quantum angles in [0, π].
+        
+        Applies: latent -> MinMax scaling -> [0, 1] -> multiply by π -> [0, π].
+        
+        Parameters
+        ----------
+        df_raw_flow : pd.DataFrame
+            Raw input dataframe.
+        eps : float
+            Small epsilon to avoid division by zero.
+            
+        Returns
+        -------
+        np.ndarray
+            Shape (n_samples, latent_dim) with angles in [0, π], dtype float32.
+            
+        Raises
+        ------
+        ValueError
+            If angle scaling bounds or latent vectors are invalid.
+        """
+        latent = self.transform_to_latent(df_raw_flow)
+
+        # Get angle scaling bounds
         if self.angle_min is None or self.angle_max is None:
-            # fallback: scale by per-dimension 99th percentiles from training latent if available
             if self.latent_training is None:
-                raise ValueError("No latent training stats available to compute angle scaling")
+                raise ValueError(
+                    "No latent training stats available to compute angle scaling"
+                )
             amin = np.min(self.latent_training, axis=0)
             amax = np.max(self.latent_training, axis=0)
         else:
             amin = self.angle_min
             amax = self.angle_max
+
         amin = amin.astype(np.float32)
         amax = amax.astype(np.float32)
-        # avoid division by zero
+
+        # Avoid division by zero
         denom = amax - amin
         denom[denom == 0] = eps
         scaled = (latent - amin) / denom
         angles = np.clip(scaled, 0.0, 1.0) * np.pi
-        # validations
+
+        # Validate angles
         if not np.isfinite(angles).all():
             raise ValueError("Angles contain non-finite values")
         if angles.min() < -1e-6 or angles.max() > np.pi + 1e-6:
-            raise ValueError("Angles out of [0, pi] after scaling")
+            raise ValueError("Angles out of [0, π] after scaling")
+
         return angles.astype(np.float32)
 
-    # ----------------------------- inverse transforms ---------------------
+    # ========================== INVERSE TRANSFORMS ========================== #
+
     def inverse_angles(self, angles: np.ndarray) -> np.ndarray:
+        """
+        Invert angles back to latent space.
+        
+        Parameters
+        ----------
+        angles : np.ndarray
+            Shape (n_samples, latent_dim), values in [0, π].
+            
+        Returns
+        -------
+        np.ndarray
+            Shape (n_samples, latent_dim), latent space values.
+        """
         angles = np.asarray(angles, dtype=np.float32)
         if angles.ndim != 2 or angles.shape[1] != self.latent_dim:
             raise ValueError(f"Angles must be shape (N, {self.latent_dim})")
+
         scaled = angles / np.pi
+
         if self.angle_min is None or self.angle_max is None:
             if self.latent_training is None:
-                raise ValueError("No latent training stats available to invert angles")
+                raise ValueError(
+                    "No latent training stats available to invert angles"
+                )
             amin = np.min(self.latent_training, axis=0)
             amax = np.max(self.latent_training, axis=0)
         else:
             amin = self.angle_min
             amax = self.angle_max
-        # invert scaling
+
+        # Invert scaling
         latent = scaled * (amax - amin) + amin
         return latent.astype(np.float32)
 
     def inverse_latent(self, latent: np.ndarray) -> pd.DataFrame:
+        """
+        Invert latent vectors back to feature space (lossy).
+        
+        Note: This is approximate due to PCA dimensionality reduction.
+        Categorical features are kept as inverse-PCA values.
+        
+        Parameters
+        ----------
+        latent : np.ndarray
+            Shape (n_samples, latent_dim).
+            
+        Returns
+        -------
+        pd.DataFrame
+            Decoded feature space (selected features only).
+        """
         latent = np.asarray(latent)
-        if self.pca is None or not hasattr(self.pca, 'inverse_transform'):
+
+        if self.pca is None or not hasattr(self.pca, "inverse_transform"):
             raise ValueError("PCA inverse not available; latent may not be invertible")
+
         X_top = self.pca.inverse_transform(latent)
-        # X_top columns correspond to selected_feature_names
         df_top = pd.DataFrame(X_top, columns=self.selected_feature_names)
-        # inverse numeric scaling for numeric subset
-        numeric_cols = [c for c in self.selected_feature_names if c in (CONTINUOUS_COLS + BINARY_COLS)]
+
+        # Inverse numeric scaling for numeric subset
+        numeric_cols = [
+            c for c in self.selected_feature_names
+            if c in (CONTINUOUS_COLS + BINARY_COLS)
+        ]
         if numeric_cols:
-            # construct a temporary scaled df matching scaler's full columns shape if necessary
             inv_numeric = inverse_log1p(df_top[numeric_cols], numeric_cols)
             df_top[numeric_cols] = inv_numeric
-        # For categorical columns among selected features, we cannot perfectly inverse if encoder produced one-hots
-        # Attempt to reconstruct categorical columns if all one-hot groups present
-        # Build full encoded dataframe with zeros for missing one-hot columns
-        # Note: exact inversion to original category strings may be approximate
+
         return df_top
 
+    # ============================== METADATA ============================== #
+
     def metadata(self) -> Dict[str, Any]:
+        """
+        Return bundle metadata as a dictionary.
+        
+        Returns
+        -------
+        dict
+            Metadata including versions, feature order, and configuration.
+        """
         return {
-            'bundle_version': self.bundle_version,
-            'schema_version': self.schema_version,
-            'dataset': self.dataset,
-            'latent_dimension': int(self.latent_dim),
-            'angle_range': '[0, pi]',
-            'categorical_features': CATEGORICAL_COLS,
-            'numerical_features': CONTINUOUS_COLS + BINARY_COLS,
-            'feature_order': self.feature_order,
-            'artifact_versions': self.artifact_versions,
+            "bundle_version": self.bundle_version,
+            "schema_version": self.schema_version,
+            "dataset": self.dataset,
+            "latent_dimension": int(self.latent_dim),
+            "angle_range": "[0, π]",
+            "categorical_features": CATEGORICAL_COLS,
+            "numerical_features": CONTINUOUS_COLS + BINARY_COLS,
+            "feature_order": self.feature_order,
+            "selected_features": self.selected_feature_names,
+            "artifact_versions": self.artifact_versions,
+            "created_at": self.created_at,
         }

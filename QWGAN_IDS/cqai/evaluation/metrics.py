@@ -105,6 +105,8 @@ def evaluate_classifier_metrics(
             pass
 
     return {
+        "macro_f1": macro_f1,
+        "macro_precision": macro_prec,
         "per_class": per_class,
         "macro": {
             "precision": macro_prec,

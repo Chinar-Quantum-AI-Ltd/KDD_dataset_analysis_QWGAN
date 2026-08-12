@@ -20,7 +20,8 @@ def generate_smote_samples(X_train, y_train, target_class, target_ratio, random_
         return np.empty((0, X.shape[1])), np.empty((0,), dtype=y.dtype)
 
     # SMOTE sampling_strategy accepts dict mapping class to desired number of samples
-    sampling_strategy = {int(target_class): target_minority_count}
+    key = int(target_class) if str(target_class).isdigit() else target_class
+    sampling_strategy = {key: target_minority_count}
     sm = SMOTE(sampling_strategy=sampling_strategy, random_state=random_state)
     X_res, y_res = sm.fit_resample(X, y)
 

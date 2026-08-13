@@ -1,0 +1,28 @@
+flowchart LR
+  subgraph AWS_VPC["AWS VPC (capture + analysis)"]
+    direction TB
+    A["VPC Traffic Mirroring\n(raw mirrored packets)"] --> B["Zeek / Suricata\n(flow extraction)"]
+  end
+
+  B --> C["Amazon Kinesis Data Streams\n(streaming flow events)"]
+  C --> D["Amazon Managed Service for Apache Flink\n(validation · schema normalization · feature transformation · inference request preparation\n(processed inference payload)")]
+  D --> E["Amazon SageMaker Real-Time Endpoint\n(registered classifier + transform_bundle.joblib)\n(ML inference)"]
+  E --> F["AWS Security Hub\n(detection / alerting)\n(security finding)"]
+
+  %% Data-flow labels
+  A -- "raw mirrored packets" --> B
+  B -- "flow records" --> C
+  C -- "streaming flow events" --> D
+  D -- "classifier-ready feature vector / inference payload" --> E
+  E -- "prediction / score / security finding" --> F
+
+  %% SLA annotation
+  subgraph SLA["End-to-end scoring SLA: ≤ 50 ms / flow (Design target)"]
+  end
+  SLA -.-> A
+
+  style AWS_VPC fill:#f7fbff,stroke:#2b6cb0,stroke-width:2
+  style C fill:#fff7ed,stroke:#dd6b20
+  style D fill:#f0fff4,stroke:#2f855a
+  style E fill:#fef3f3,stroke:#c53030
+  style F fill:#f7fafc,stroke:#2d3748

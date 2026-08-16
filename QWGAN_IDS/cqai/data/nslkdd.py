@@ -42,6 +42,7 @@ from src.encoding import log1p_transform, numeric_cols_of
 from src.loader import COLUMN_NAMES
 from src.preprocessing import BINARY_COLS, CATEGORICAL_COLS, CONTINUOUS_COLS
 from src.quantum_encoding import angle_decode
+from cqai.lineage.artifacts import runtime_versions, verified_joblib_load
 
 from ..qwgan.config import QWGANConfig
 from ..qwgan.data_contract import TrainingAngles
@@ -192,15 +193,11 @@ class TrainContract:
 
     def families(self, partition: str) -> np.ndarray:
         self._require_partition(partition)
-        return np.load(
-            self.root / f"families_{partition}.npy", allow_pickle=True
-        )
+        return np.load(self.root / f"families_{partition}.npy", allow_pickle=False)
 
     def raw_labels(self, partition: str) -> np.ndarray:
         self._require_partition(partition)
-        return np.load(
-            self.root / f"raw_labels_{partition}.npy", allow_pickle=True
-        )
+        return np.load(self.root / f"raw_labels_{partition}.npy", allow_pickle=False)
 
     def class_counts(self, partition: str) -> dict[str, int]:
         self._require_partition(partition)
@@ -269,11 +266,25 @@ class TrainContract:
         """
 
         selected = list(self.manifest["selected_features"])
+        fitting_versions = self.manifest.get("metadata", {}).get("fitting_versions")
+
+        def load_transform(name: str):
+            try:
+                digest = self.manifest["artifact_sha256"][name]
+            except KeyError as exc:
+                raise ValueError(f"contract has no registered hash for {name}") from exc
+            return verified_joblib_load(
+                self.root / name,
+                expected_sha256=digest,
+                fitting_versions=fitting_versions,
+                require_envelope=False,
+            )
+
         decoded = angle_decode(
             np.asarray(angles, dtype=np.float64),
-            joblib.load(self.root / "minmax_scaler.joblib"),
-            joblib.load(self.root / "pca.joblib"),
-            joblib.load(self.root / "robust_scaler.joblib"),
+            load_transform("minmax_scaler.joblib"),
+            load_transform("pca.joblib"),
+            load_transform("robust_scaler.joblib"),
             numeric_cols_of(selected),
             selected,
         )
@@ -454,11 +465,11 @@ def build_train_contract(
         )
         np.save(
             root / f"families_{name}.npy",
-            families.iloc[_positions].to_numpy().astype(object),
+            families.iloc[_positions].to_numpy(dtype=str),
         )
         np.save(
             root / f"raw_labels_{name}.npy",
-            part_frame["label"].to_numpy().astype(object),
+            part_frame["label"].to_numpy(dtype=str),
         )
 
     joblib.dump(encoder, root / "encoder.joblib")
@@ -515,6 +526,7 @@ def build_train_contract(
             "source_rows": _count_lines(source),
             "cleaned_rows": int(len(frame)),
             "validation_angles_clipped": val_clipped,
+            "fitting_versions": runtime_versions(),
         },
     }
     manifest["artifact_sha256"] = {

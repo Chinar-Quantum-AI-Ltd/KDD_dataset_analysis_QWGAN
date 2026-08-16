@@ -8,13 +8,13 @@ Includes sub-sampling bounds to handle quadratic O(N^2) kernel scaling on large 
 from __future__ import annotations
 
 from pathlib import Path
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 from sklearn.svm import SVC
 
 from .base import BaseClassifier
+from cqai.lineage import dump_joblib_artifact, verified_joblib_load
 
 PI = float(np.pi)
 
@@ -117,11 +117,20 @@ class QuantumKernelSVM(BaseClassifier):
     def save(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self, path)
+        dump_joblib_artifact(self, path, kind="classifier.quantum_kernel_svm")
 
     @classmethod
-    def load(cls, path: str | Path) -> QuantumKernelSVM:
-        obj = joblib.load(path)
-        if not isinstance(obj, QuantumKernelSVM):
-            raise TypeError(f"Loaded object is not QuantumKernelSVM: {type(obj)}")
-        return obj
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        expected_sha256: str,
+        fitting_versions: dict[str, str],
+    ) -> QuantumKernelSVM:
+        return verified_joblib_load(
+            path,
+            expected_sha256=expected_sha256,
+            expected_type=cls,
+            expected_kind="classifier.quantum_kernel_svm",
+            fitting_versions=fitting_versions,
+        )

@@ -5,7 +5,6 @@ Provides a multi-layer PyTorch MLP adhering to ``BaseClassifier``.
 from __future__ import annotations
 
 from pathlib import Path
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
@@ -15,6 +14,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 
 from .base import BaseClassifier
+from cqai.lineage import dump_joblib_artifact, verified_joblib_load
 
 
 class _FCMLP(nn.Module):
@@ -112,11 +112,20 @@ class PyTorchDNNClassifier(BaseClassifier):
     def save(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self, path)
+        dump_joblib_artifact(self, path, kind="classifier.pytorch_dnn")
 
     @classmethod
-    def load(cls, path: str | Path) -> PyTorchDNNClassifier:
-        obj = joblib.load(path)
-        if not isinstance(obj, PyTorchDNNClassifier):
-            raise TypeError(f"Loaded object is not PyTorchDNNClassifier: {type(obj)}")
-        return obj
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        expected_sha256: str,
+        fitting_versions: dict[str, str],
+    ) -> PyTorchDNNClassifier:
+        return verified_joblib_load(
+            path,
+            expected_sha256=expected_sha256,
+            expected_type=cls,
+            expected_kind="classifier.pytorch_dnn",
+            fitting_versions=fitting_versions,
+        )

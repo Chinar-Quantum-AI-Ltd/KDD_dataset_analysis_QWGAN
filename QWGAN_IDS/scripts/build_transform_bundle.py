@@ -25,7 +25,6 @@ import json
 import sys
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 
@@ -35,6 +34,12 @@ sys.path.insert(0, str(QWGAN_IDS_DIR))
 
 from src.transform_bundle import TransformBundle
 from src.preprocessing import verify_schema, CONTINUOUS_COLS, CATEGORICAL_COLS, BINARY_COLS
+from cqai.lineage import (
+    load_artifact_manifest,
+    registered_artifact,
+    verified_pandas_read_pickle,
+)
+from cqai.lineage.artifacts import runtime_versions
 
 DATA_DIR = QWGAN_IDS_DIR / "data"
 ARTIFACT_DIR = QWGAN_IDS_DIR / "artifacts"
@@ -142,7 +147,11 @@ def validate_bundle(bundle: TransformBundle) -> bool:
     feature_matrix_path = DATA_DIR / "feature_matrix.pkl"
     if feature_matrix_path.exists():
         try:
-            feature_matrix = pd.read_pickle(feature_matrix_path)
+            registry = load_artifact_manifest(ARTIFACT_DIR / "artifact_manifest.json")
+            digest, _ = registered_artifact(registry, feature_matrix_path.name)
+            feature_matrix = verified_pandas_read_pickle(
+                feature_matrix_path, expected_sha256=digest
+            )
             transformed = bundle.transform(df.head(20))
             common_cols = [c for c in bundle.feature_order if c in feature_matrix.columns]
             if common_cols:
@@ -169,18 +178,21 @@ def serialize_bundle(bundle: TransformBundle, dest: Path) -> Path:
     """Serialize bundle and return path."""
     print(f"\n[serialize] Writing bundle to {dest}...")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, str(dest))
+    bundle.save(str(dest))
     file_size = dest.stat().st_size
     print(f"  ✓ Serialized successfully ({file_size} bytes)")
     return dest
 
 
-def verify_deserialization(src: Path) -> bool:
+def verify_deserialization(src: Path, expected_sha256: str) -> bool:
     """Load the bundle in a fresh process and verify it works."""
     print(f"\n[deserialize] Verifying deserialization...")
     try:
-        loaded = joblib.load(str(src))
-        assert isinstance(loaded, TransformBundle)
+        loaded = TransformBundle.load(
+            src,
+            expected_sha256=expected_sha256,
+            fitting_versions=runtime_versions(),
+        )
         print(f"  ✓ Deserialization successful")
         print(f"  - Loaded encoder: {type(loaded.encoder).__name__}")
         print(f"  - Loaded scaler: {type(loaded.scaler).__name__}")
@@ -191,7 +203,9 @@ def verify_deserialization(src: Path) -> bool:
         return False
 
 
-def serialize_roundtrip(bundle: TransformBundle, bundle_path: Path) -> bool:
+def serialize_roundtrip(
+    bundle: TransformBundle, bundle_path: Path, expected_sha256: str
+) -> bool:
     """Test that transform output is identical before/after serialization."""
     print(f"\n[roundtrip] Testing serialization consistency...")
     
@@ -204,7 +218,11 @@ def serialize_roundtrip(bundle: TransformBundle, bundle_path: Path) -> bool:
         df = pd.read_csv(sample_path).head(5)
         output_before = bundle.transform(df)
         
-        loaded_bundle = joblib.load(str(bundle_path))
+        loaded_bundle = TransformBundle.load(
+            bundle_path,
+            expected_sha256=expected_sha256,
+            fitting_versions=runtime_versions(),
+        )
         output_after = loaded_bundle.transform(df)
         
         pd.testing.assert_frame_equal(output_before, output_after)
@@ -220,6 +238,7 @@ def create_manifest(bundle_path: Path, hash_value: str, metadata: dict) -> Path:
     manifest_path = bundle_path.parent / "manifest.json"
     
     manifest = {
+        "fitting_versions": runtime_versions(),
         "artifacts": {
             "transform_bundle": {
                 "path": str(bundle_path.relative_to(ARTIFACT_DIR)),
@@ -325,18 +344,20 @@ def main() -> int:
         print(f"\n[!] Failed to serialize bundle: {e}")
         return 1
     
+    # Calculate identity before any deserialization verification.
+    hash_value = sha256_file(bundle_path)
+
     # Step 4: Verify deserialization
-    if not verify_deserialization(bundle_path):
+    if not verify_deserialization(bundle_path, hash_value):
         print(f"\n[!] Deserialization verification failed")
         return 1
     
     # Step 5: Test serialization roundtrip
-    if not serialize_roundtrip(bundle, bundle_path):
+    if not serialize_roundtrip(bundle, bundle_path, hash_value):
         print(f"\n[!] Serialization roundtrip test failed")
         return 1
     
     # Step 6: Calculate SHA-256
-    hash_value = sha256_file(bundle_path)
     print(f"\n[hash] SHA-256: {hash_value}")
     
     # Step 7: Create manifest with metadata

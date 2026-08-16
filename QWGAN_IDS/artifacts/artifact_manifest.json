@@ -1,0 +1,46 @@
+{
+  "artifacts": {
+    "encoder.pkl": {
+      "path": "artifacts/encoder.pkl",
+      "fitting_versions": {
+        "scikit_learn": "1.9.0"
+      },
+      "sha256": "975420bfdf7b4acbf70ac47722f412efa9b63e1d3931d0129e1cd0ae7a833ff2"
+    },
+    "feature_names.json": {
+      "path": "artifacts/feature_names.json",
+      "sha256": "d63acf84aa6f390d957c91f284428f2d7384225397d174299d57ab6d25ecb927"
+    },
+    "feature_matrix.pkl": {
+      "path": "data/feature_matrix.pkl",
+      "sha256": "baf6927e753c5ad56214881106659ef0af6f8c911f08d9be2b9088e49aa058fb"
+    },
+    "minmax_scaler.pkl": {
+      "path": "artifacts/minmax_scaler.pkl",
+      "fitting_versions": {
+        "scikit_learn": "1.9.0"
+      },
+      "sha256": "637541233a883a4bb260b93464b9d28979a6c2ef082617705973cb70b898ca91"
+    },
+    "pca.pkl": {
+      "path": "artifacts/pca.pkl",
+      "fitting_versions": {
+        "scikit_learn": "1.9.0"
+      },
+      "sha256": "fe227059cd2a7d9e87fcc7f8802e51b6888b360f64f8addabbae663ef6e61c94"
+    },
+    "robust_scaler.pkl": {
+      "path": "artifacts/robust_scaler.pkl",
+      "fitting_versions": {
+        "scikit_learn": "1.9.0"
+      },
+      "sha256": "deb55eff1b69678219c30d40a052518bc414f366de9867227990bfd66f7123ee"
+    },
+    "selected_feature_names.npy": {
+      "path": "data/selected_feature_names.npy",
+      "sha256": "4491a06b5587b6766a83496a9f919f8899dc37073f149358dc3755213cb5f79b"
+    }
+  },
+  "manifest_version": "1.0",
+  "trust_model": "Git-tracked local registry; deployment must protect or sign this manifest"
+}

@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import OneHotEncoder, RobustScaler
 
+from cqai.lineage import load_artifact_manifest, registered_artifact, verified_joblib_load
 from .preprocessing import BINARY_COLS, CATEGORICAL_COLS, CONTINUOUS_COLS
 
 DATA_DIR = Path("data")
@@ -93,7 +94,14 @@ def build_feature_matrix(
         encoder_path = artifact_dir / "encoder.pkl"
         if not encoder_path.exists():
             raise FileNotFoundError(f"{encoder_path} not found. Fit first.")
-        encoder = joblib.load(encoder_path)
+        registry = load_artifact_manifest(artifact_dir / "artifact_manifest.json")
+        digest, fitting_versions = registered_artifact(registry, encoder_path.name)
+        encoder = verified_joblib_load(
+            encoder_path,
+            expected_sha256=digest,
+            fitting_versions=fitting_versions,
+            require_envelope=False,
+        )
         encoded = encoder.transform(df[categorical_cols])
         cat_names = encoder.get_feature_names_out(categorical_cols)
 

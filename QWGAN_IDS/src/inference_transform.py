@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import joblib
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -18,14 +17,21 @@ class OnlineFeatureTransformer:
         features = t.transform_flow(flow_df)  # returns latent ndarray (N, latent_dim)
     """
 
-    def __init__(self, bundle_path: str | Path):
+    def __init__(
+        self,
+        bundle_path: str | Path,
+        *,
+        expected_sha256: str,
+        fitting_versions: dict[str, str],
+    ):
         p = Path(bundle_path)
         if not p.exists():
             raise FileNotFoundError(f"Transform bundle not found at {p}")
-        obj = joblib.load(p)
-        if not isinstance(obj, TransformBundle):
-            raise ValueError("Loaded object is not a TransformBundle")
-        self.bundle: TransformBundle = obj
+        self.bundle = TransformBundle.load(
+            p,
+            expected_sha256=expected_sha256,
+            fitting_versions=fitting_versions,
+        )
 
     def transform_flow(self, flow: pd.DataFrame) -> np.ndarray:
         """Validate and transform a flow dataframe into the classifier feature

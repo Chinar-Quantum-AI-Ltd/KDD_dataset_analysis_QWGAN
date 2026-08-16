@@ -5,13 +5,13 @@ Provides XGBoost classifier adhering to ``BaseClassifier``.
 from __future__ import annotations
 
 from pathlib import Path
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
 from xgboost import XGBClassifier
 
 from .base import BaseClassifier
+from cqai.lineage import dump_joblib_artifact, verified_joblib_load
 
 
 class XGBClassifierWrapper(BaseClassifier):
@@ -23,7 +23,7 @@ class XGBClassifierWrapper(BaseClassifier):
         max_depth: int = 6,
         learning_rate: float = 0.1,
         random_state: int = 42,
-        n_jobs: int = -1,
+        n_jobs: int = 1,
     ) -> None:
         super().__init__(name="xgboost", random_state=random_state)
         self.n_estimators = n_estimators
@@ -67,11 +67,20 @@ class XGBClassifierWrapper(BaseClassifier):
     def save(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self, path)
+        dump_joblib_artifact(self, path, kind="classifier.xgboost")
 
     @classmethod
-    def load(cls, path: str | Path) -> XGBClassifierWrapper:
-        obj = joblib.load(path)
-        if not isinstance(obj, XGBClassifierWrapper):
-            raise TypeError(f"Loaded object is not XGBClassifierWrapper: {type(obj)}")
-        return obj
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        expected_sha256: str,
+        fitting_versions: dict[str, str],
+    ) -> XGBClassifierWrapper:
+        return verified_joblib_load(
+            path,
+            expected_sha256=expected_sha256,
+            expected_type=cls,
+            expected_kind="classifier.xgboost",
+            fitting_versions=fitting_versions,
+        )

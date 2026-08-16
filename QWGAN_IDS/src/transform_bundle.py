@@ -31,6 +31,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from src.loader import COLUMN_NAMES
 from src.encoding import log1p_transform, inverse_log1p, numeric_cols_of, categorical_cols_of
 from src.preprocessing import verify_schema, CONTINUOUS_COLS, CATEGORICAL_COLS, BINARY_COLS
+from cqai.lineage import (
+    dump_joblib_artifact,
+    load_artifact_manifest,
+    registered_artifact,
+    sha256_file,
+    verified_joblib_load,
+)
 
 
 @dataclass
@@ -105,7 +112,8 @@ class TransformBundle:
     def load_from_artifacts(
         cls,
         artifacts_dir: str = "artifacts",
-        data_dir: str = "data"
+        data_dir: str = "data",
+        manifest_path: str | None = None,
     ) -> "TransformBundle":
         """
         Load a TransformBundle from fitted artifacts on disk.
@@ -129,27 +137,42 @@ class TransformBundle:
         """
         art = Path(artifacts_dir)
         data = Path(data_dir)
+        registry = load_artifact_manifest(
+            manifest_path or art / "artifact_manifest.json"
+        )
+
+        def load_registered_joblib(path: Path) -> Any:
+            digest, fitting_versions = registered_artifact(registry, path.name)
+            return verified_joblib_load(
+                path,
+                expected_sha256=digest,
+                fitting_versions=fitting_versions,
+                require_envelope=False,
+            )
 
         # load encoder
         encoder_path = art / "encoder.pkl"
         if not encoder_path.exists():
             raise FileNotFoundError(f"Encoder not found at {encoder_path}")
-        encoder = joblib.load(encoder_path)
+        encoder = load_registered_joblib(encoder_path)
 
         # load scaler
         scaler_path = art / "robust_scaler.pkl"
         if not scaler_path.exists():
             raise FileNotFoundError(f"Scaler not found at {scaler_path}")
-        scaler = joblib.load(scaler_path)
+        scaler = load_registered_joblib(scaler_path)
 
         # load pca (may be absent if autoencoder used)
         pca_path = art / "pca.pkl"
-        pca = joblib.load(pca_path) if pca_path.exists() else None
+        pca = load_registered_joblib(pca_path) if pca_path.exists() else None
 
         # feature names
         fn_path = art / "feature_names.json"
         if not fn_path.exists():
             raise FileNotFoundError(f"feature_names.json not found at {fn_path}")
+        feature_names_hash, _ = registered_artifact(registry, fn_path.name)
+        if sha256_file(fn_path) != feature_names_hash:
+            raise ValueError("feature_names.json failed registered SHA-256 verification")
         with open(fn_path, "r") as fh:
             feature_names = json.load(fh)
 
@@ -157,7 +180,10 @@ class TransformBundle:
         sel_path = data / "selected_feature_names.npy"
         if not sel_path.exists():
             raise FileNotFoundError(f"selected_feature_names.npy not found at {sel_path}")
-        selected = list(np.load(sel_path, allow_pickle=True))
+        selected_hash, _ = registered_artifact(registry, sel_path.name)
+        if sha256_file(sel_path) != selected_hash:
+            raise ValueError("selected feature names failed registered SHA-256 verification")
+        selected = list(np.load(sel_path, allow_pickle=False))
 
         # latent training data (used to compute angle scaling)
         latent_path = data / "latent_features.npy"
@@ -208,10 +234,16 @@ class TransformBundle:
         path : str
             Destination file path.
         """
-        joblib.dump(self, path)
+        dump_joblib_artifact(self, path, kind="transform_bundle")
 
     @classmethod
-    def load(cls, path: str) -> "TransformBundle":
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        expected_sha256: str,
+        fitting_versions: Dict[str, str],
+    ) -> "TransformBundle":
         """
         Deserialize a bundle from disk.
         
@@ -230,10 +262,13 @@ class TransformBundle:
         ValueError
             If the loaded object is not a TransformBundle.
         """
-        obj = joblib.load(path)
-        if not isinstance(obj, cls):
-            raise ValueError("Loaded object is not a TransformBundle")
-        return obj
+        return verified_joblib_load(
+            path,
+            expected_sha256=expected_sha256,
+            expected_type=cls,
+            expected_kind="transform_bundle",
+            fitting_versions=fitting_versions,
+        )
 
     # ============================== VALIDATION ============================== #
 
@@ -294,6 +329,9 @@ class TransformBundle:
             "invalid_categories": [],
         }
 
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError("Raw flow input must be a pandas DataFrame")
+
         # Check schema
         try:
             self.validate_schema(df)
@@ -330,10 +368,16 @@ class TransformBundle:
                             "column": cat_col,
                             "invalid_values": list(invalid),
                         })
-                        # Note: encoder has handle_unknown="ignore", so it won't fail
-                        # but we report it anyway
-                except Exception:
-                    pass
+                except (AttributeError, IndexError) as exc:
+                    raise ValueError(
+                        f"Cannot validate fitted categories for {cat_col}: {exc}"
+                    ) from exc
+
+        if report["invalid_categories"]:
+            raise ValueError(
+                "Unknown categorical values are out-of-distribution and cannot be "
+                f"silently encoded as zero blocks: {report['invalid_categories']}"
+            )
 
         return report
 

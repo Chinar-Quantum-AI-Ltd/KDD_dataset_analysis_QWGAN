@@ -1,31 +1,6 @@
-# QWGAN_IDS - FR-1/FR-2 NSL-KDD quantum-ready pipeline
-# Core data / ML stack
-pandas>=1.5
-numpy>=1.23
-scikit-learn>=1.2
-scipy>=1.9
-joblib>=1.2
-xgboost>=2.0
-imbalanced-learn>=0.11
+# Reproducible runtime stack. Update requirements-lock.txt deliberately and
+# validate the complete Torch/PennyLane/XGBoost suite before changing pins.
+-r requirements-lock.txt
 
-# Visualization / EDA
-matplotlib>=3.6
-seaborn>=0.12
-
-# Notebooks
-ipykernel>=6.20
-nbformat>=5.7
-
-# Download helpers
-requests>=2.28
-
-# FR-3 experiment configuration (cqai/qwgan/cli.py)
-PyYAML>=6.0
-
-# Quantum verification (Notebook 6)
-pennylane>=0.32
-torch>=2.0
-
-# Optional: autoencoder path in Notebook 4 / run_pipeline.py --method autoencoder
-# tensorflow>=2.12
-
+# Optional autoencoder path in Notebook 4 / run_pipeline.py --method autoencoder
+# tensorflow is intentionally not part of the supported audit-tested runtime.

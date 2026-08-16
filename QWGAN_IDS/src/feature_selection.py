@@ -26,6 +26,11 @@ import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import mutual_info_classif
+from cqai.lineage import (
+    load_artifact_manifest,
+    registered_artifact,
+    verified_pandas_read_pickle,
+)
 from sklearn.preprocessing import LabelEncoder
 
 DATA_DIR = Path("data")
@@ -162,7 +167,12 @@ def run_feature_selection(
 
     Expects ``feature_matrix.pkl`` plus ``kdd_clean.csv`` (for labels).
     """
-    feature_matrix = pd.read_pickle(feature_matrix_path)
+    artifact_dir = Path(artifact_dir)
+    manifest = load_artifact_manifest(artifact_dir / "artifact_manifest.json")
+    digest, _ = registered_artifact(manifest, Path(feature_matrix_path).name)
+    feature_matrix = verified_pandas_read_pickle(
+        feature_matrix_path, expected_sha256=digest
+    )
     clean = pd.read_csv(DATA_DIR / "kdd_clean.csv")
     y = clean[label_col]
 

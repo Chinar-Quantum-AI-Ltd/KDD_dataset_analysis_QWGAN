@@ -96,7 +96,15 @@ class GenerateTests(unittest.TestCase):
                 checkpoint, contract=contract, count=50, seed=11, chunk_size=7
             )
 
-            np.testing.assert_array_equal(one_call.angles, chunked.angles)
+            # Statevector contraction order may change with broadcast batch
+            # shape.  The audit measured only 3.9e-16 of reassociation drift;
+            # 1e-12 remains strict enough to catch behavioral changes.
+            np.testing.assert_allclose(
+                one_call.angles,
+                chunked.angles,
+                rtol=1e-12,
+                atol=1e-12,
+            )
 
     def test_the_same_seed_replays_and_a_different_seed_diverges(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

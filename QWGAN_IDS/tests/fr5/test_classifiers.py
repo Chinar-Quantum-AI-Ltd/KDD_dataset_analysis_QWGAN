@@ -13,6 +13,7 @@ from cqai.classifiers import (
     RFClassifier,
     XGBClassifierWrapper,
 )
+from cqai.lineage import runtime_versions, sha256_file
 
 
 class ClassifierPanelTests(unittest.TestCase):
@@ -45,7 +46,13 @@ class ClassifierPanelTests(unittest.TestCase):
             clf.save(save_path)
             self.assertTrue(save_path.exists())
 
-            loaded = type(clf).load(save_path)
+            # Loading an executable joblib artifact requires trusted identity
+            # and fitting-version provenance before deserialization.
+            loaded = type(clf).load(
+                save_path,
+                expected_sha256=sha256_file(save_path),
+                fitting_versions=runtime_versions(),
+            )
             self.assertTrue(loaded.is_fitted)
             loaded_preds = loaded.predict(self.X_test)
             np.testing.assert_array_equal(preds, loaded_preds)

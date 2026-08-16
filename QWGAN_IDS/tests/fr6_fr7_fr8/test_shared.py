@@ -4,11 +4,17 @@ from __future__ import annotations
 import tempfile
 import unittest
 import numpy as np
+import pandas as pd
 
 from cqai.ablation import AblationRunner, build_ablation_arm, compute_paired_ttest
 from cqai.classifiers import RFClassifier
 from cqai.lineage import build_lineage_manifest
 from cqai.serving import ClassicalServingPipeline, benchmark_serving_latency
+
+
+class _IdentityTransform:
+    def transform(self, frame: pd.DataFrame) -> np.ndarray:
+        return frame.to_numpy(dtype=float)
 
 
 class TestFR6Ablation(unittest.TestCase):
@@ -60,12 +66,14 @@ class TestFR7Serving(unittest.TestCase):
         rng = np.random.default_rng(42)
         X_tr = rng.normal(size=(30, 8))
         y_tr = np.array(["normal"] * 20 + ["r2l"] * 10)
-        X_te = rng.normal(size=(5, 8))
+        X_te = pd.DataFrame(np.abs(rng.normal(size=(5, 8))))
 
         clf = RFClassifier(n_estimators=5, random_state=42)
         clf.fit(X_tr, y_tr)
 
-        pipeline = ClassicalServingPipeline(classifier=clf)
+        pipeline = ClassicalServingPipeline(
+            classifier=clf, transformer=_IdentityTransform()
+        )
         res = pipeline.predict_flow(X_te)
         self.assertTrue(res["is_quantum_free"])
         self.assertEqual(res["flow_count"], 5)
@@ -74,13 +82,17 @@ class TestFR7Serving(unittest.TestCase):
         rng = np.random.default_rng(42)
         X_tr = rng.normal(size=(30, 8))
         y_tr = np.array(["normal"] * 20 + ["r2l"] * 10)
-        X_te = rng.normal(size=(2, 8))
+        X_te = pd.DataFrame(np.abs(rng.normal(size=(2, 8))))
 
         clf = RFClassifier(n_estimators=5, random_state=42)
         clf.fit(X_tr, y_tr)
 
-        pipeline = ClassicalServingPipeline(classifier=clf)
-        bench = benchmark_serving_latency(pipeline, X_te, n_iterations=10, max_p99_ms=50.0)
+        pipeline = ClassicalServingPipeline(
+            classifier=clf, transformer=_IdentityTransform()
+        )
+        bench = benchmark_serving_latency(
+            pipeline, X_te, n_iterations=100, max_p99_ms=50.0
+        )
         self.assertTrue(bench["sla_passed"])
         self.assertLessEqual(bench["p99_ms"], 50.0)
 

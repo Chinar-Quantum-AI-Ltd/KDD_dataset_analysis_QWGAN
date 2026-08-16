@@ -5,12 +5,12 @@ Provides a balanced RandomForestClassifier adhering to ``BaseClassifier``.
 from __future__ import annotations
 
 from pathlib import Path
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 
 from .base import BaseClassifier
+from cqai.lineage import dump_joblib_artifact, verified_joblib_load
 
 
 class RFClassifier(BaseClassifier):
@@ -61,11 +61,20 @@ class RFClassifier(BaseClassifier):
     def save(self, path: str | Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(self, path)
+        dump_joblib_artifact(self, path, kind="classifier.random_forest")
 
     @classmethod
-    def load(cls, path: str | Path) -> RFClassifier:
-        obj = joblib.load(path)
-        if not isinstance(obj, RFClassifier):
-            raise TypeError(f"Loaded object is not RFClassifier: {type(obj)}")
-        return obj
+    def load(
+        cls,
+        path: str | Path,
+        *,
+        expected_sha256: str,
+        fitting_versions: dict[str, str],
+    ) -> RFClassifier:
+        return verified_joblib_load(
+            path,
+            expected_sha256=expected_sha256,
+            expected_type=cls,
+            expected_kind="classifier.random_forest",
+            fitting_versions=fitting_versions,
+        )

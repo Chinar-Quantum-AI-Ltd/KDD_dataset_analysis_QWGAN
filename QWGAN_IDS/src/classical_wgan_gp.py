@@ -12,21 +12,47 @@ stable interface so the FR-6 runner can execute Arm C in smoke tests.
 from typing import Optional
 import numpy as np
 import os
-import joblib
+from cqai.lineage import verified_joblib_load
 
 
 class ClassicalWGAN:
-    def __init__(self, model_path: Optional[str] = None, n_features: int = 41):
+    def __init__(
+        self,
+        model_path: Optional[str] = None,
+        n_features: int = 41,
+        *,
+        expected_sha256: str | None = None,
+        fitting_versions: dict[str, str] | None = None,
+    ):
         self.model_path = model_path
         self.n_features = n_features
         self._generator = None
         if model_path is not None:
-            self.load(model_path)
+            if expected_sha256 is None:
+                raise ValueError("expected_sha256 is required for a persisted WGAN")
+            if fitting_versions is None:
+                raise ValueError("fitting_versions are required for a persisted WGAN")
+            self.load(
+                model_path,
+                expected_sha256=expected_sha256,
+                fitting_versions=fitting_versions,
+            )
 
-    def load(self, model_path: str):
+    def load(
+        self,
+        model_path: str,
+        *,
+        expected_sha256: str,
+        fitting_versions: dict[str, str],
+    ):
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Classical WGAN model not found at {model_path}")
-        obj = joblib.load(model_path)
+        obj = verified_joblib_load(
+            model_path,
+            expected_sha256=expected_sha256,
+            expected_kind="classical_wgan",
+            fitting_versions=fitting_versions,
+        )
         # expected to find a dict with 'generator' key or a callable
         if isinstance(obj, dict) and 'generator' in obj:
             self._generator = obj['generator']

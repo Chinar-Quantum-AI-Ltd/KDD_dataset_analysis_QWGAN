@@ -22,6 +22,12 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
+from cqai.lineage import (
+    load_artifact_manifest,
+    registered_artifact,
+    sha256_file,
+    verified_joblib_load,
+)
 from .encoding import inverse_numeric, numeric_cols_of
 from .feature_selection import LATENT_DIM
 
@@ -211,12 +217,27 @@ def run_inverse_verification(
 ) -> np.ndarray:
     """Reconstruct feature values from angles and return the decoded matrix."""
     angles = np.load(angles_path)
-    minmax = joblib.load(artifact_dir / "minmax_scaler.pkl")
-    pca = joblib.load(artifact_dir / "pca.pkl")
-    robust = joblib.load(artifact_dir / "robust_scaler.pkl")
+    artifact_dir = Path(artifact_dir)
+    registry = load_artifact_manifest(artifact_dir / "artifact_manifest.json")
 
-    top_names = np.load(data_dir / "selected_feature_names.npy",
-                        allow_pickle=True).tolist()
+    def load_registered(name: str):
+        digest, fitting_versions = registered_artifact(registry, name)
+        return verified_joblib_load(
+            artifact_dir / name,
+            expected_sha256=digest,
+            fitting_versions=fitting_versions,
+            require_envelope=False,
+        )
+
+    minmax = load_registered("minmax_scaler.pkl")
+    pca = load_registered("pca.pkl")
+    robust = load_registered("robust_scaler.pkl")
+
+    selected_path = Path(data_dir) / "selected_feature_names.npy"
+    selected_digest, _ = registered_artifact(registry, selected_path.name)
+    if sha256_file(selected_path) != selected_digest:
+        raise ValueError("selected feature names failed registered SHA-256 verification")
+    top_names = np.load(selected_path, allow_pickle=False).tolist()
     numeric_cols = numeric_cols_of(top_names)
 
     decoded = angle_decode(angles, minmax, pca, robust, numeric_cols, top_names)

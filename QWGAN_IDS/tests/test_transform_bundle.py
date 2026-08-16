@@ -1,11 +1,18 @@
 import os
 import tempfile
 import unittest
-import joblib
 import numpy as np
 import pandas as pd
 
+from cqai.lineage import (
+    ArtifactCompatibilityError,
+    load_artifact_manifest,
+    registered_artifact,
+    sha256_file,
+    verified_pandas_read_pickle,
+)
 from src.transform_bundle import TransformBundle
+from cqai.lineage.artifacts import runtime_versions
 
 ARTIFACT_PATH = "artifacts/transform_bundle.joblib"
 ARTIFACTS_DIR = "artifacts"
@@ -13,9 +20,18 @@ DATA_DIR = "data"
 
 
 def _load_bundle():
-    if os.path.exists(ARTIFACT_PATH):
-        return joblib.load(ARTIFACT_PATH)
-    return TransformBundle.load_from_artifacts(ARTIFACTS_DIR, DATA_DIR)
+    try:
+        if os.path.exists(ARTIFACT_PATH):
+            return TransformBundle.load(
+                ARTIFACT_PATH,
+                expected_sha256=sha256_file(ARTIFACT_PATH),
+                fitting_versions=runtime_versions(),
+            )
+        return TransformBundle.load_from_artifacts(ARTIFACTS_DIR, DATA_DIR)
+    except ArtifactCompatibilityError as exc:
+        raise unittest.SkipTest(
+            f"Registered preprocessing artifact is incompatible and must be rebuilt: {exc}"
+        ) from exc
 
 
 class TestTransformBundle(unittest.TestCase):
@@ -70,15 +86,23 @@ class TestTransformBundle(unittest.TestCase):
         out1 = bundle.transform(df)
         with tempfile.TemporaryDirectory() as tmp_dir:
             dest = os.path.join(tmp_dir, "bundle.joblib")
-            joblib.dump(bundle, dest)
-            loaded = joblib.load(dest)
+            bundle.save(dest)
+            loaded = TransformBundle.load(
+                dest,
+                expected_sha256=sha256_file(dest),
+                fitting_versions=runtime_versions(),
+            )
             out2 = loaded.transform(df)
             pd.testing.assert_frame_equal(out1, out2)
 
     @unittest.skipIf(not os.path.exists(os.path.join(DATA_DIR, "feature_matrix.pkl")), "feature_matrix.pkl missing")
     def test_train_serve_consistency_small(self):
         bundle = _load_bundle()
-        feature_matrix = pd.read_pickle(os.path.join(DATA_DIR, "feature_matrix.pkl"))
+        registry = load_artifact_manifest("artifacts/artifact_manifest.json")
+        digest, _ = registered_artifact(registry, "feature_matrix.pkl")
+        feature_matrix = verified_pandas_read_pickle(
+            os.path.join(DATA_DIR, "feature_matrix.pkl"), expected_sha256=digest
+        )
         sample_path = os.path.join(DATA_DIR, "kdd_clean.csv")
         if not os.path.exists(sample_path):
             self.skipTest("kdd_clean.csv not present; skipping consistency test")
